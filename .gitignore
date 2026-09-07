@@ -1,0 +1,31 @@
+# Dependencies and generated output
+node_modules/
+coverage/
+dist/
+*.tgz
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.local
+
+# Logs and temporary files
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.tmp
+*.temp
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local agent state
+.agents/
+.codex/
