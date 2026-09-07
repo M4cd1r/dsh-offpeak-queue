@@ -1,11 +1,12 @@
 // 冒烟：index.js 可被 import，导出契约正确（name/apply），且 src/core.mjs 存在
-import { name, apply } from '../index.js'
+import { name, apply, deliverOnce } from '../index.js'
 import { createOffpeakCore } from '../src/core.mjs'
 import { readFileSync } from 'node:fs'
 import assert from 'node:assert/strict'
 
 assert.equal(name, 'offpeak-queue')
 assert.equal(typeof apply, 'function')
+assert.equal(typeof deliverOnce, 'function')
 assert.equal(typeof createOffpeakCore, 'function')
 
 const client = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
@@ -18,4 +19,13 @@ assert.doesNotMatch(client, /slots\.inject\('conversation\.input\.dock'/)
 assert.doesNotMatch(client, /slots\.inject\('conversation\.composer',/)
 assert.match(client, /send intercepted:/)
 
-console.log('smoke OK: host exports + composer dock + visible fallback')
+const host = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
+assert.match(host, /apiProxy\.sessions\.prompt/)
+assert.match(host, /rpcId: 'offpeak-queue-' \+ randomUUID\(\)/)
+assert.match(host, /payload: \{/)
+assert.match(host, /mode: 'queue'/)
+assert.match(host, /role: 'user'/)
+assert.match(host, /id: randomUUID\(\)/)
+assert.match(host, /delivery ' \+ item\.id \+ ': failed:/)
+
+console.log('smoke OK: host delivery + composer dock + visible fallback')

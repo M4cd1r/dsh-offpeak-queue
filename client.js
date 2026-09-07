@@ -2,7 +2,7 @@
 // 硬约束：模块加载与 apply 均不向外抛异常 —— 任何失败只 console + 上报 host /report，
 // 绝不导致渲染器/启动异常。UI 契约：window.__ModuleLoader__.load({ id, factory })，
 // factory CommonJS 导出 { apply(ctx), inject: ['slots'] }。
-// v0.1.5-ui：保留原生 composer，以捕获阶段拦截发送并可靠入队；居中队列模态框。
+// v0.1.6-ui：保留原生 composer，以捕获阶段拦截发送并可靠入队；居中队列模态框。
 
 ;(function () {
   let load = null
@@ -23,7 +23,7 @@
         const module = { exports: {} }
         const inject = ['slots']
         const BASE = '/dsh-offpeak-queue'
-        const CLIENT_BUILD = '0.1.5-ui-send-interceptor'
+        const CLIENT_BUILD = '0.1.6-ui-host-delivery'
         const consoleError = (...a) => { try { if (typeof console !== 'undefined') console.error('[offpeak-queue]', ...a) } catch { /* ignore */ } }
 
         const report = (kind, error) => {

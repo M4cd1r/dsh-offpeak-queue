@@ -3,12 +3,13 @@
 // 对外通道：GET /dsh-offpeak-queue/state（轮询快照）、POST /action（动作）、POST /report（客户端错误上报）。
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import os from 'node:os'
 import { createOffpeakCore } from './src/core.mjs'
 
 export const name = 'offpeak-queue'
-const VERSION = '0.1.5'
+const VERSION = '0.1.6'
 const ROUTE_PREFIX = '/dsh-offpeak-queue'
 
 function homeRoot() {
@@ -17,20 +18,60 @@ function homeRoot() {
 }
 
 /** 把一个排队消息投递到它记录的目标会话。 */
-async function deliverOnce(ctx, item) {
+export async function deliverOnce(ctx, item) {
   if (!item || typeof item.sessionId !== 'string' || item.sessionId === '') {
     throw new Error('缺少目标会话')
   }
-  const agents = ctx && ctx.agents
-  let agent = agents && typeof agents.get === 'function' ? agents.get(item.sessionId) : undefined
-  if (!agent && agents && typeof agents.resume === 'function') {
-    const handle = await agents.resume({ resumeSessionId: item.sessionId })
-    if (handle && handle.agent) agent = handle.agent
+
+  // 首选宿主的标准 session.prompt 通道。它会生成完整 UserMessage，并按会话已保存的
+  // composition/provider/model 恢复冷会话；直接 agents.resume 缺少这些参数会在等待数小时后失败。
+  let apiProxy
+  try {
+    apiProxy = ctx && typeof ctx.get === 'function' ? ctx.get('apiProxy') : undefined
+  } catch { apiProxy = undefined }
+  if (!apiProxy && ctx) apiProxy = ctx.apiProxy
+  if (apiProxy && apiProxy.sessions && typeof apiProxy.sessions.prompt === 'function') {
+    const response = await apiProxy.sessions.prompt({
+      rpcId: 'offpeak-queue-' + randomUUID(),
+      payload: {
+        sessionId: item.sessionId,
+        mode: 'queue',
+        content: [{ type: 'text', text: item.text }],
+      },
+    })
+    const result = response && typeof response === 'object' ? response.result : undefined
+    if (result && typeof result === 'object' && result.ok === false) {
+      const error = result.error && typeof result.error === 'object' ? result.error : {}
+      const code = typeof error.code === 'string' && error.code !== '' ? error.code + ': ' : ''
+      const message = typeof error.message === 'string' && error.message !== '' ? error.message : 'DSH 拒绝接收队列消息'
+      throw new Error(code + message)
+    }
+    const accepted = result && typeof result === 'object' && result.value && typeof result.value === 'object'
+      ? result.value.accepted
+      : result && typeof result === 'object' && 'accepted' in result
+        ? result.accepted
+      : response && typeof response === 'object' ? response.accepted : undefined
+    if (accepted === false) throw new Error('DSH 拒绝接收队列消息')
+    return
   }
+
+  // 兼容缺少 apiProxy 的旧宿主：仅复用仍在线的 agent。消息必须包含 DSH UserMessage
+  // 的 role/id；冷会话不在这里猜测模型配置，以免投递到错误的 composition。
+  let agents
+  try {
+    agents = ctx && typeof ctx.get === 'function' ? ctx.get('agents') : undefined
+  } catch { agents = undefined }
+  if (!agents && ctx) agents = ctx.agents
+  const agent = agents && typeof agents.get === 'function' ? agents.get(item.sessionId) : undefined
   if (!agent || typeof agent.followup !== 'function') {
-    throw new Error('目标会话不可用或无法唤醒')
+    throw new Error('session.prompt 不可用，且目标会话当前未在线')
   }
-  const message = { content: [{ type: 'text', text: item.text }], source: { kind: 'user' } }
+  const message = {
+    content: [{ type: 'text', text: item.text }],
+    source: { kind: 'user' },
+    role: 'user',
+    id: randomUUID(),
+  }
   const maybe = agent.followup(message)
   if (maybe && typeof maybe.then === 'function') await maybe
 }
@@ -61,7 +102,16 @@ export function apply(ctx) {
     let core = null
     try {
       core = createOffpeakCore({
-        deliver: (item) => deliverOnce(ctx, item),
+        deliver: async (item) => {
+          try {
+            await deliverOnce(ctx, item)
+            log('delivery ' + item.id + ': ok')
+          } catch (error) {
+            const message = error && error.message ? String(error.message) : String(error)
+            log('delivery ' + item.id + ': failed: ' + message.slice(0, 1000))
+            throw error
+          }
+        },
       })
     } catch (error) {
       log('core create failed:', error && error.message)
@@ -105,7 +155,7 @@ export function apply(ctx) {
           core.setConcurrency(n); commit(); return done()
         }
         case 'setPeaks':
-          if (!core.setPeaks(args.peaks)) return fail('参数无效：高峰时段须为 1-6 个 0-23 且起止不同的小时区间')
+          if (!core.setPeaks(args.peaks)) return fail('参数无效：高峰时段须为 1-6 个有效且起止不同的时段')
           commit(); return done()
         case 'enqueue': {
           const out = core.enqueue({ text: args.text, sessionId: args.sessionId })

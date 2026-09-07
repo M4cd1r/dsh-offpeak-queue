@@ -17,12 +17,12 @@ export function phaseOf(peaks, weekendsOffPeak, date) {
     const day = date.getDay()
     if (day === 0 || day === 6) return 'trough'
   }
-  const hour = date.getHours()
+  const minuteOfDay = date.getHours() * 60 + date.getMinutes()
   for (const peak of peaks) {
-    const s = peak.startH
-    const e = peak.endH
+    const s = peak.startH * 60 + (Number.isInteger(peak.startM) ? peak.startM : 0)
+    const e = peak.endH * 60 + (Number.isInteger(peak.endM) ? peak.endM : 0)
     if (s === e) continue
-    if (s < e ? hour >= s && hour < e : hour >= s || hour < e) return 'peak'
+    if (s < e ? minuteOfDay >= s && minuteOfDay < e : minuteOfDay >= s || minuteOfDay < e) return 'peak'
   }
   return 'trough'
 }
@@ -34,8 +34,17 @@ function validPeaks(value) {
     if (p === null || typeof p !== 'object') return undefined
     const s = p.startH
     const e = p.endH
-    if (!Number.isInteger(s) || !Number.isInteger(e) || s < 0 || s > 23 || e < 0 || e > 23 || s === e) return undefined
-    peaks.push({ startH: s, endH: e })
+    const sm = p.startM === undefined ? 0 : p.startM
+    const em = p.endM === undefined ? 0 : p.endM
+    if (!Number.isInteger(s) || !Number.isInteger(e) || s < 0 || s > 23 || e < 0 || e > 23) return undefined
+    if (!Number.isInteger(sm) || !Number.isInteger(em) || sm < 0 || sm > 59 || em < 0 || em > 59) return undefined
+    if (s * 60 + sm === e * 60 + em) return undefined
+    const normalized = { startH: s, endH: e }
+    if (p.startM !== undefined || p.endM !== undefined) {
+      normalized.startM = sm
+      normalized.endM = em
+    }
+    peaks.push(normalized)
   }
   if (peaks.length < 1 || peaks.length > 6) return undefined
   return peaks

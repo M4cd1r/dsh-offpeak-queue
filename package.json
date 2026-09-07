@@ -1,6 +1,6 @@
 {
   "name": "dsh-offpeak-queue",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "DeepSeek Harness peak-hour message queue: defer selected sends and deliver them to the original conversation off-peak. / DSH 高峰消息暂存与低谷自动投递。",
   "type": "module",
   "main": "index.js",
@@ -19,7 +19,7 @@
   ],
   "scripts": {
     "check": "node --check client.js && node --check index.js",
-    "test": "node --test test/core.test.mjs",
+    "test": "node --test test/*.test.mjs",
     "smoke": "node scripts/smoke.mjs",
     "balance": "node scripts/balance.mjs",
     "verify": "npm run check && npm test && npm run smoke && npm run balance",
