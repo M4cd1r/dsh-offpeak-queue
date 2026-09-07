@@ -77,6 +77,7 @@ export function createOffpeakCore({ deliver, now = () => new Date() }) {
   const viewHistory = (h) => ({
     id: h.id,
     text: typeof h.text === 'string' ? h.text.slice(0, 2000) : '',
+    sessionId: h.sessionId,
     createdAt: h.createdAt,
     status: h.status,
     attempts: h.attempts,
@@ -95,6 +96,7 @@ export function createOffpeakCore({ deliver, now = () => new Date() }) {
     state.history.unshift({
       id: item.id,
       text: item.text,
+      sessionId: item.sessionId,
       createdAt: item.createdAt,
       status,
       attempts: item.attempts,

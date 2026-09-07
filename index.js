@@ -9,7 +9,7 @@ import os from 'node:os'
 import { createOffpeakCore } from './src/core.mjs'
 
 export const name = 'offpeak-queue'
-const VERSION = '0.1.6'
+const VERSION = '0.1.7'
 const ROUTE_PREFIX = '/dsh-offpeak-queue'
 
 function homeRoot() {
@@ -105,10 +105,10 @@ export function apply(ctx) {
         deliver: async (item) => {
           try {
             await deliverOnce(ctx, item)
-            log('delivery ' + item.id + ': ok')
+            log('delivery ' + item.id + ' target=' + item.sessionId + ': ok')
           } catch (error) {
             const message = error && error.message ? String(error.message) : String(error)
-            log('delivery ' + item.id + ': failed: ' + message.slice(0, 1000))
+            log('delivery ' + item.id + ' target=' + item.sessionId + ': failed: ' + message.slice(0, 1000))
             throw error
           }
         },
@@ -160,6 +160,7 @@ export function apply(ctx) {
         case 'enqueue': {
           const out = core.enqueue({ text: args.text, sessionId: args.sessionId })
           if (out.ok !== true) return { resp: { ok: false, error: out.error, state: snapshot() } }
+          log('enqueue ' + out.item.id + ' target=' + out.item.sessionId)
           return done()
         }
         case 'force': {

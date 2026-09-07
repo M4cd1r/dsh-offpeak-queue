@@ -1,8 +1,8 @@
 // dsh-offpeak-queue —— Web Client 半侧（原生静态 bundle · 防御版）
 // 硬约束：模块加载与 apply 均不向外抛异常 —— 任何失败只 console + 上报 host /report，
 // 绝不导致渲染器/启动异常。UI 契约：window.__ModuleLoader__.load({ id, factory })，
-// factory CommonJS 导出 { apply(ctx), inject: ['slots'] }。
-// v0.1.6-ui：保留原生 composer，以捕获阶段拦截发送并可靠入队；居中队列模态框。
+// factory CommonJS 导出 { apply(ctx), inject: ['slots', 'sessions'] }。
+// v0.1.7-ui：发送时从当前输入框与 sessions 服务双重解析会话，杜绝切换/新建时串会话。
 
 ;(function () {
   let load = null
@@ -21,9 +21,9 @@
       id: 'dsh-offpeak-queue',
       factory: (require) => {
         const module = { exports: {} }
-        const inject = ['slots']
+        const inject = ['slots', 'sessions']
         const BASE = '/dsh-offpeak-queue'
-        const CLIENT_BUILD = '0.1.6-ui-host-delivery'
+        const CLIENT_BUILD = '0.1.7-ui-session-routing'
         const consoleError = (...a) => { try { if (typeof console !== 'undefined') console.error('[offpeak-queue]', ...a) } catch { /* ignore */ } }
 
         const report = (kind, error) => {
@@ -54,12 +54,12 @@
             const day = date.getDay()
             if (day === 0 || day === 6) return 'trough'
           }
-          const hour = date.getHours()
+          const minuteOfDay = date.getHours() * 60 + date.getMinutes()
           for (const peak of snap.peaks) {
-            const s = peak.startH
-            const e = peak.endH
+            const s = peak.startH * 60 + (Number.isInteger(peak.startM) ? peak.startM : 0)
+            const e = peak.endH * 60 + (Number.isInteger(peak.endM) ? peak.endM : 0)
             if (s === e) continue
-            if (s < e ? hour >= s && hour < e : hour >= s || hour < e) return 'peak'
+            if (s < e ? minuteOfDay >= s && minuteOfDay < e : minuteOfDay >= s || minuteOfDay < e) return 'peak'
           }
           return 'trough'
         }
@@ -196,18 +196,58 @@
                 props && props.owner && props.owner.sessionId,
                 props && props.owner && props.owner.id,
               ]
-              const found = candidates.find((value) => typeof value === 'string' && value.trim() !== '')
-              if (found) activeSessionId = found.trim()
+              const found = candidates.map(normalizeSessionId).find((value) => value !== '')
+              if (found) activeSessionId = found
               if (props && props.inputActions && typeof props.inputActions.setDraft === 'function') {
                 activeSetDraft = props.inputActions.setDraft.bind(props.inputActions)
               }
             } catch { /* ignore */ }
           }
-          function currentSessionId() {
+          function normalizeSessionId(value) {
+            try {
+              const text = typeof value === 'string' ? value.trim() : ''
+              return /^session-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(text) ? text : ''
+            } catch { return '' }
+          }
+          function sessionFromService() {
+            try {
+              const list = ctx && ctx.sessions && ctx.sessions.list
+              if (!list || typeof list.getSnapshot !== 'function') return { available: false, id: '' }
+              const snapshot = list.getSnapshot()
+              return { available: true, id: normalizeSessionId(snapshot && snapshot.current) }
+            } catch { return { available: false, id: '' } }
+          }
+          function sessionFromEditor(editor) {
+            try {
+              if (!editor || typeof editor !== 'object') return ''
+              const key = Object.keys(editor).find((name) => name.indexOf('__reactFiber$') === 0)
+              let fiber = key ? editor[key] : null
+              for (let depth = 0; fiber && depth < 30; depth += 1, fiber = fiber.return) {
+                const candidates = [
+                  fiber.memoizedProps && fiber.memoizedProps.sessionId,
+                  fiber.pendingProps && fiber.pendingProps.sessionId,
+                ]
+                const found = candidates.map(normalizeSessionId).find((value) => value !== '')
+                if (found) return found
+              }
+            } catch { /* fall through */ }
+            return ''
+          }
+          function currentSessionId(editor) {
+            const editorId = sessionFromEditor(editor)
+            const service = sessionFromService()
+            if (editorId !== '' && service.id !== '' && editorId !== service.id) {
+              reportInfo('session mismatch blocked: editor=' + editorId + ' current=' + service.id + ' build=' + CLIENT_BUILD)
+              return ''
+            }
+            if (editorId !== '') return editorId
+            if (service.id !== '') return service.id
+            // sessions 服务明确存在但 current 为空时，当前处于切换过渡态；不能沿用旧缓存。
+            if (service.available) return ''
             try {
               const raw = decodeURIComponent(String(window.location && window.location.href ? window.location.href : ''))
               const match = raw.match(/(?:session-)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i)
-              if (match) return match[0]
+              if (match) return normalizeSessionId(match[0])
             } catch { /* fall through */ }
             return activeSessionId
           }
@@ -376,7 +416,7 @@
                 if (!snap || snap.planMode !== true) { setDraft(typeof draft === 'string' ? draft : ''); return }
                 const text = (typeof draft === 'string' ? draft : '').trim()
                 if (text === '') return
-                void act('enqueue', { text, sessionId: typeof props.sessionId === 'string' ? props.sessionId : '' }).then((ok) => {
+                void act('enqueue', { text, sessionId: currentSessionId() }).then((ok) => {
                   setFlashKind(ok ? 'ok' : 'err')
                   setFlash(ok ? '已暂存 · 低谷自动投递' : '入队失败，请查看队列面板')
                   if (ok) setDraft('')
@@ -743,7 +783,7 @@
                   const textValue = editorText(editor).trim()
                   if (textValue === '') return false
                   stopSendEvent(event)
-                  const sessionId = currentSessionId()
+                  const sessionId = currentSessionId(editor)
                   if (sessionId === '') {
                     setNotice('未识别当前会话，已阻止直接发送', 'error')
                     reportInfo('send intercepted but session missing: source=' + source + ' build=' + CLIENT_BUILD)

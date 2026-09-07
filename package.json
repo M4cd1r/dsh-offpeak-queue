@@ -1,6 +1,6 @@
 {
   "name": "dsh-offpeak-queue",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "DeepSeek Harness peak-hour message queue: defer selected sends and deliver them to the original conversation off-peak. / DSH 高峰消息暂存与低谷自动投递。",
   "type": "module",
   "main": "index.js",
