@@ -2,7 +2,7 @@
 
 # dsh-offpeak-queue
 
-面向 DeepSeek Harness（DSH）的低谷发送队列。日常消息继续使用原生输入框直接发送；不着急的任务可切换到“低谷再发”，高峰期先暂存，低谷到来后自动投递回原会话。
+面向 DeepSeek Harness（DSH）的低谷发送队列。日常消息继续使用原生输入框直接发送；不着急的任务可切换到“低谷再发”，高峰期先暂存，低谷到来后自动投递回原会话。投递时机按**该会话所属 provider** 的高峰时段判断，时段来自 `dsh-offpeak` 插件；未安装时回退到本插件自带的本地时段。
 
 已在 Windows、DSH Desktop 2.0.3、`desktop` profile 下测试。
 
@@ -10,6 +10,7 @@
 
 - **默认直接发送**：未主动开启“低谷再发”时，DSH 原生输入框保持原有行为。
 - **高峰发送拦截**：开启“低谷再发”后，高峰期按 Enter 或点击原生发送按钮都会把当前消息加入队列。
+- **按 provider 调度**：每条队列消息记录所属会话的 provider/model，DeepSeek 任务等 DeepSeek 低谷，Z.ai 任务等 Z.ai 低谷，互不干扰。
 - **保留多行编辑**：Shift+Enter 继续换行。
 - **低谷自动投递**：进入低谷时段后，消息自动发回创建它的原会话。
 - **居中队列面板**：等待、工作中、执行记录在 DSH 会话窗口中央展示，不受输入区高度限制。
@@ -27,25 +28,40 @@
 | 已启用 | 低谷再发 | 低谷 | 由 DSH 正常发送 |
 | 已启用 | 低谷再发 | 高峰 | 消息进入队列 |
 
-默认规则按操作系统本地时间计算：
+### Provider 时段
+
+挂载 `dsh-offpeak` 后，队列在每次发送和投递判断时都会向它询问当前会话 provider/model 的时段：
+
+- DeepSeek 会话只在 DeepSeek 高峰时段入队；
+- Z.ai 会话只在 Z.ai 高峰时段入队；
+- 固定费率 provider 不会入队。
+
+每条队列消息会保留入队时捕获的 provider 和 model，因此不同 provider 的任务独立等待，各自到达低谷后分别投递。
+
+### 回退时段
+
+未安装 `dsh-offpeak`，或该 provider 未在其中配置时段时，队列回退到自己的本地时间规则，并可在队列面板中编辑：
 
 - 高峰时段：`09:00–12:00`、`14:00–18:00`
 - 周六、周日：全天视为低谷
 - 投递并发数：`1`
 - 发送模式：直接发送
 
-这些设置都能在队列面板中修改，并支持 `22:00–06:00` 这类跨午夜时段。
+以上设置都支持 `22:00–06:00` 这类跨午夜时段。
 
 ## 环境要求
 
 - 带 Web 或 Desktop profile 的 DeepSeek Harness
-- DSH runtime `>=0.1.1-rc.1`
-- Node.js 20 或更高版本
+- DSH runtime `>=0.1.5-rc.1`
+- Node.js 22.19 或更高版本
+- 同一 profile 中挂载 `dsh-offpeak` `>=0.2.0` 以获得按 provider 调度（可选；未安装时回退到本地时段）
 - 安装或升级后完整重启 DSH；静态 client bundle 只在启动时加载
 
 ## 安装
 
 ### 从 npm 安装
+
+要获得按 provider 调度，请先安装并挂载 [dsh-offpeak](https://github.com/AlexShang1992/dsh-offpeak)。队列会读取它的 `offpeak` 设置命名空间与 host 服务。
 
 以下包名安装命令在 `dsh-offpeak-queue` 发布到 npm 后可用。
 
@@ -84,7 +100,7 @@ dsh plugin --profile desktop remove dsh-offpeak-queue
 
 1. 打开任意 DSH 会话，输入框附近会出现“直接发送”和“队列 n”。
 2. 点击“直接发送”，切换为“低谷再发”。
-3. 在设定的高峰时段编辑消息，按 Enter 或点击 DSH 原生发送按钮。host 确认入队成功后，插件才会清空输入框。
+3. 在当前 provider 的高峰时段编辑消息，按 Enter 或点击 DSH 原生发送按钮。host 确认入队成功后，插件才会清空输入框。
 4. 点击“队列 n”，查看或管理已暂存的任务。
 5. 进入低谷后，host 会把每条消息投递回创建它的会话。
 
@@ -102,6 +118,7 @@ dsh plugin --profile desktop remove dsh-offpeak-queue
 
 - 插件不依赖外部网络服务，也不需要单独的凭据。
 - client 诊断仅提交到插件在本机 DSH host 上注册的路由，并追加到 `host.log`。
+- 队列消息入队时会从在线会话捕获 provider 与 model，仅用于查询该 provider 的时段。
 - 设置会持久化到 `config.json`。
 - 等待、工作中和执行记录目前保存在内存中，DSH host 进程退出后会清空。重启前请先处理或复制仍在等待的消息。
 - 队列最多容纳 200 条待处理消息；单条消息上限为 50,000 个字符。
