@@ -1,8 +1,9 @@
+// dsh-offpeak-queue — session routing tests
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createOffpeakCore } from '../src/core.mjs'
 
-test('三条队列消息保持各自的 A/B/C 目标会话', async () => {
+test('three queued messages keep their own A/B/C target sessions', async () => {
   const delivered = []
   const core = createOffpeakCore({
     deliver: async (item) => { delivered.push({ id: item.id, sessionId: item.sessionId, text: item.text }) },
@@ -12,9 +13,9 @@ test('三条队列消息保持各自的 A/B/C 目标会话', async () => {
   core.setPeaks([{ startH: 9, endH: 12 }])
 
   const targets = [
-    ['已有会话 A', 'session-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'],
-    ['新会话 B', 'session-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'],
-    ['已有会话 C', 'session-cccccccc-cccc-4ccc-8ccc-cccccccccccc'],
+    ['existing session A', 'session-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'],
+    ['new session B', 'session-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'],
+    ['existing session C', 'session-cccccccc-cccc-4ccc-8ccc-cccccccccccc'],
   ]
   for (const [text, sessionId] of targets) assert.equal(core.enqueue({ text, sessionId }).ok, true)
 

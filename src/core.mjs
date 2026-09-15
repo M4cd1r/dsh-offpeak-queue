@@ -50,7 +50,7 @@ function validPeaks(value) {
   return peaks
 }
 
-export function createOffpeakCore({ deliver, now = () => new Date() }) {
+export function createOffpeakCore({ deliver, now = () => new Date(), phaseForItem }) {
   const state = {
     enabled: true,
     planMode: false,
@@ -63,12 +63,17 @@ export function createOffpeakCore({ deliver, now = () => new Date() }) {
     seq: 0,
     lastFailAt: 0,
   }
+  const phaseFor = typeof phaseForItem === 'function'
+    ? phaseForItem
+    : (item, date) => phaseOf(state.peaks, state.weekendsOffPeak, date)
   const submit = typeof deliver === 'function' ? deliver : async () => { throw new Error('no deliver') }
 
   const view = (item) => ({
     id: item.id,
     text: item.text,
     sessionId: item.sessionId,
+    providerId: item.providerId,
+    modelId: item.modelId,
     createdAt: item.createdAt,
     status: item.status,
     attempts: item.attempts,
@@ -78,6 +83,8 @@ export function createOffpeakCore({ deliver, now = () => new Date() }) {
     id: h.id,
     text: typeof h.text === 'string' ? h.text.slice(0, 2000) : '',
     sessionId: h.sessionId,
+    providerId: h.providerId,
+    modelId: h.modelId,
     createdAt: h.createdAt,
     status: h.status,
     attempts: h.attempts,
@@ -97,6 +104,8 @@ export function createOffpeakCore({ deliver, now = () => new Date() }) {
       id: item.id,
       text: item.text,
       sessionId: item.sessionId,
+      providerId: item.providerId,
+      modelId: item.modelId,
       createdAt: item.createdAt,
       status,
       attempts: item.attempts,
@@ -150,7 +159,7 @@ export function createOffpeakCore({ deliver, now = () => new Date() }) {
       if (next) { state.peaks = next; return true }
       return false
     },
-    enqueue: ({ text, sessionId }) => {
+    enqueue: ({ text, sessionId, providerId, modelId }) => {
       if (state.enabled !== true) return { ok: false, error: '插件已停用' }
       if (state.waiting.length + state.work.length >= QUEUE_LIMIT) return { ok: false, error: '队列已满' }
       const clean = typeof text === 'string' ? text.trim() : ''
@@ -160,6 +169,8 @@ export function createOffpeakCore({ deliver, now = () => new Date() }) {
         id: 'q' + (++state.seq),
         text: clean,
         sessionId: typeof sessionId === 'string' ? sessionId : undefined,
+        providerId: typeof providerId === 'string' && providerId !== '' ? providerId : undefined,
+        modelId: typeof modelId === 'string' && modelId !== '' ? modelId : undefined,
         createdAt: now().getTime(),
         status: 'waiting',
         attempts: 0,
@@ -213,10 +224,15 @@ export function createOffpeakCore({ deliver, now = () => new Date() }) {
     tick: async (date) => {
       const when = date ?? now()
       if (state.enabled !== true) return
-      if (api.phase(when) !== 'trough') return
       if (when.getTime() - state.lastFailAt < FAIL_COOLDOWN_MS) return
-      while (state.waiting.length > 0 && state.work.length < state.concurrency) {
-        const item = state.waiting.shift()
+      let index = 0
+      while (index < state.waiting.length && state.work.length < state.concurrency) {
+        const item = state.waiting[index]
+        if (phaseFor(item, when) !== 'trough') {
+          index += 1
+          continue
+        }
+        state.waiting.splice(index, 1)
         item.status = 'work'
         state.work.push(item)
         void execute(item, when)
