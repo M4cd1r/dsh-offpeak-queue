@@ -125,7 +125,7 @@
           '.oqToggleBadge{position:absolute;top:-3px;right:-3px;display:block;box-sizing:border-box;min-width:14px;height:14px;padding:0 4px;border-radius:999px;background:var(--dsw-alias-button-info-fill,#4165d7);color:#fff;font-size:9.5px;font-weight:600;line-height:14px;text-align:center;font-variant-numeric:tabular-nums}',
           '.oqToggle[data-peak][data-active] .oqToggleBadge{background:var(--dsw-alias-state-warn-primary,#e8a23c)}',
           // sidebar footer action (matches the Cordis panel row)
-          '.oqLayer{display:flex;align-items:center;justify-content:center;position:relative;flex:none;width:36px;height:36px;margin:0}',
+          '.oqLayer{display:flex;align-items:center;justify-content:center;position:relative;flex:none;width:36px;height:36px;margin:0 0 0 6px}',
           '.oqFooterButtons{display:flex;align-items:center;width:auto}',
           '.oqBadge{corner-shape:round;display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;width:36px;height:36px;margin:0;padding:0;color:var(--dsw-alias-label-secondary,#61666b);background:0 0;border:none;border-radius:50%;cursor:pointer;font-family:inherit}',
           '.oqBadge:hover,.oqBadge[data-active]{background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.06));color:var(--dsw-alias-label-primary,#1c1e26)}',
