@@ -1,7 +1,7 @@
 # dsh-offpeak-queue bundle patch: one host row over the desktop profile.
 # The row name resolves from the profile's node_modules where the package is installed.
-# Mount dsh-offpeak before this row so the queue can read its provider schedules;
-# without it the queue falls back to its own peak windows.
+# dsh-offpeak is required at runtime: mount it before this row so the queue
+# can read its provider schedules. The queue does not fall back to local windows.
 #
 # Emergency disable without uninstalling: add this row at the top-level array of
 # the profile's cordis.patch.yml, then restart the profile:

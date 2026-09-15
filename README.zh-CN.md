@@ -2,7 +2,7 @@
 
 # dsh-offpeak-queue
 
-面向 DeepSeek Harness（DSH）的低谷发送队列。日常消息继续使用原生输入框直接发送；不着急的任务可切换到“低谷再发”，高峰期先暂存，低谷到来后自动投递回原会话。投递时机按**该会话所属 provider** 的高峰时段判断，时段来自 `dsh-offpeak` 插件；未安装时回退到本插件自带的本地时段。
+面向 DeepSeek Harness（DSH）的低谷发送队列。日常消息继续使用原生输入框直接发送；不着急的任务可切换到“低谷再发”，高峰期先暂存，低谷到来后自动投递回原会话。投递时机按**该会话所属 provider** 的高峰时段判断，时段来自 `dsh-offpeak` 插件；该插件是运行时必需依赖，未安装时队列不会入队。
 
 已在 Windows、DSH Desktop 2.0.3、`desktop` profile 下测试。
 
@@ -11,6 +11,7 @@
 - **默认直接发送**：未主动开启“低谷再发”时，DSH 原生输入框保持原有行为。
 - **高峰发送拦截**：开启“低谷再发”后，高峰期按 Enter 或点击原生发送按钮都会把当前消息加入队列。
 - **按 provider 调度**：每条队列消息记录所属会话的 provider/model，DeepSeek 任务等 DeepSeek 低谷，Z.ai 任务等 Z.ai 低谷，互不干扰。
+- **无回退时段**：`dsh-offpeak` 是运行时必需依赖，本插件不再提供本地高峰时段配置。
 - **保留多行编辑**：Shift+Enter 继续换行。
 - **低谷自动投递**：进入低谷时段后，消息自动发回创建它的原会话。
 - **居中队列面板**：等待、工作中、执行记录在 DSH 会话窗口中央展示，不受输入区高度限制。
@@ -38,30 +39,29 @@
 
 每条队列消息会保留入队时捕获的 provider 和 model，因此不同 provider 的任务独立等待，各自到达低谷后分别投递。
 
-### 回退时段
+### 缺少 dsh-offpeak
 
-未安装 `dsh-offpeak`，或该 provider 未在其中配置时段时，队列回退到自己的本地时间规则，并可在队列面板中编辑：
+`dsh-offpeak` 是运行时必需依赖。未挂载时，队列会：
 
-- 高峰时段：`09:00–12:00`、`14:00–18:00`
-- 周六、周日：全天视为低谷
-- 投递并发数：`1`
-- 发送模式：直接发送
+- 在面板与 `/dsh-offpeak-queue/state` 中报告 `dsh-offpeak is required`；
+- 拒绝 `enqueue`，且不会投递任何消息；
+- 保留 provider/model 解析与并发设置，待依赖恢复后继续使用。
 
-以上设置都支持 `22:00–06:00` 这类跨午夜时段。
+本插件不再提供本地高峰时段配置。
 
 ## 环境要求
 
 - 带 Web 或 Desktop profile 的 DeepSeek Harness
 - DSH runtime `>=0.1.5-rc.1`
 - Node.js 22.19 或更高版本
-- 同一 profile 中挂载 `dsh-offpeak` `>=0.2.0` 以获得按 provider 调度（可选；未安装时回退到本地时段）
+- 同一 profile 中挂载 `dsh-offpeak` `>=0.2.0`（运行时必需）
 - 安装或升级后完整重启 DSH；静态 client bundle 只在启动时加载
 
 ## 安装
 
 ### 从 npm 安装
 
-要获得按 provider 调度，请先安装并挂载 [dsh-offpeak](https://github.com/AlexShang1992/dsh-offpeak)。队列会读取它的 `offpeak` 设置命名空间与 host 服务。
+[dsh-offpeak](https://github.com/AlexShang1992/dsh-offpeak) 是运行时必需依赖：请先安装并挂载。队列会读取它的 `offpeak` 设置命名空间与 host 服务。
 
 以下包名安装命令在 `dsh-offpeak-queue` 发布到 npm 后可用。
 

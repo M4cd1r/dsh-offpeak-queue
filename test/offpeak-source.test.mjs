@@ -1,7 +1,7 @@
 // dsh-offpeak-queue — host integration with the dsh-offpeak plugin
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { offpeakPhase, resolveSessionPair } from '../index.js'
+import { offpeakAvailable, offpeakPhase, resolveSessionPair } from '../index.js'
 
 function serviceCtx(map) {
   return {
@@ -60,6 +60,12 @@ test('offpeakPhase maps dsh-offpeak window kinds to peak/trough', () => {
   assert.equal(offpeakPhase(ctx, 'deepseek-official', 'deepseek-chat', new Date()), 'peak')
   assert.equal(offpeakPhase(ctx, 'zai', 'glm-5.2', new Date()), 'trough')
   assert.equal(offpeakPhase(ctx, 'unknown-provider', 'model', new Date()), null)
+})
+
+test('offpeakAvailable detects the required dsh-offpeak service', () => {
+  assert.equal(offpeakAvailable(serviceCtx({ offpeak: { windowKindFor() {} } })), true)
+  assert.equal(offpeakAvailable(serviceCtx({})), false)
+  assert.equal(offpeakAvailable(serviceCtx({ offpeak: {} })), false)
 })
 
 test('offpeakPhase returns null without a usable offpeak service', () => {
