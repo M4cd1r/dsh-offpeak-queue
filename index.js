@@ -9,7 +9,7 @@ import os from 'node:os'
 import { createOffpeakCore } from './src/core.mjs'
 
 export const name = 'offpeak-queue'
-const VERSION = '0.1.7'
+const VERSION = '0.1.8'
 const ROUTE_PREFIX = '/dsh-offpeak-queue'
 
 function homeRoot() {
@@ -20,7 +20,7 @@ function homeRoot() {
 /** 把一个排队消息投递到它记录的目标会话。 */
 export async function deliverOnce(ctx, item) {
   if (!item || typeof item.sessionId !== 'string' || item.sessionId === '') {
-    throw new Error('缺少目标会话')
+    throw new Error('missing target session')
   }
 
   // 首选宿主的标准 session.prompt 通道。它会生成完整 UserMessage，并按会话已保存的
@@ -43,7 +43,7 @@ export async function deliverOnce(ctx, item) {
     if (result && typeof result === 'object' && result.ok === false) {
       const error = result.error && typeof result.error === 'object' ? result.error : {}
       const code = typeof error.code === 'string' && error.code !== '' ? error.code + ': ' : ''
-      const message = typeof error.message === 'string' && error.message !== '' ? error.message : 'DSH 拒绝接收队列消息'
+      const message = typeof error.message === 'string' && error.message !== '' ? error.message : 'DSH refused to accept the queued message'
       throw new Error(code + message)
     }
     const accepted = result && typeof result === 'object' && result.value && typeof result.value === 'object'
@@ -51,7 +51,7 @@ export async function deliverOnce(ctx, item) {
       : result && typeof result === 'object' && 'accepted' in result
         ? result.accepted
       : response && typeof response === 'object' ? response.accepted : undefined
-    if (accepted === false) throw new Error('DSH 拒绝接收队列消息')
+    if (accepted === false) throw new Error('DSH refused to accept the queued message')
     return
   }
 
@@ -64,7 +64,7 @@ export async function deliverOnce(ctx, item) {
   if (!agents && ctx) agents = ctx.agents
   const agent = agents && typeof agents.get === 'function' ? agents.get(item.sessionId) : undefined
   if (!agent || typeof agent.followup !== 'function') {
-    throw new Error('session.prompt 不可用，且目标会话当前未在线')
+    throw new Error('session.prompt is unavailable and the target session is offline')
   }
   const message = {
     content: [{ type: 'text', text: item.text }],
@@ -141,21 +141,21 @@ export function apply(ctx) {
       const flag = (key) => typeof args[key] === 'boolean'
       switch (action) {
         case 'setPlanMode':
-          if (!flag('planMode')) return fail('参数无效：planMode 须为布尔')
+          if (!flag('planMode')) return fail('invalid argument: planMode must be a boolean')
           core.setPlanMode(args.planMode); commit(); return done()
         case 'setEnabled':
-          if (!flag('enabled')) return fail('参数无效：enabled 须为布尔')
+          if (!flag('enabled')) return fail('invalid argument: enabled must be a boolean')
           core.setEnabled(args.enabled); commit(); return done()
         case 'setWeekendsOffPeak':
-          if (!flag('weekendsOffPeak')) return fail('参数无效：weekendsOffPeak 须为布尔')
+          if (!flag('weekendsOffPeak')) return fail('invalid argument: weekendsOffPeak must be a boolean')
           core.setWeekendsOffPeak(args.weekendsOffPeak); commit(); return done()
         case 'setConcurrency': {
           const n = args.concurrency
-          if (!Number.isInteger(n) || n < 1 || n > 5) return fail('参数无效：并发须为 1-5')
+          if (!Number.isInteger(n) || n < 1 || n > 5) return fail('invalid argument: concurrency must be between 1 and 5')
           core.setConcurrency(n); commit(); return done()
         }
         case 'setPeaks':
-          if (!core.setPeaks(args.peaks)) return fail('参数无效：高峰时段须为 1-6 个有效且起止不同的时段')
+          if (!core.setPeaks(args.peaks)) return fail('invalid argument: peak hours must be 1-6 valid windows whose start and end differ')
           commit(); return done()
         case 'enqueue': {
           const out = core.enqueue({ text: args.text, sessionId: args.sessionId })
@@ -181,7 +181,7 @@ export function apply(ctx) {
         case 'clearHistory':
           core.clearHistory(); return done()
         default:
-          return fail('未知动作：' + action)
+          return fail('unknown action: ' + action)
       }
     }
 
@@ -211,7 +211,7 @@ export function apply(ctx) {
         log('action ' + (action || '(empty)') + ': ' + (out.resp && out.resp.ok === true ? 'ok' : 'failed'))
         respondJson(res, out.httpStatus || 200, out.resp)
       } catch (error) {
-        respondJson(res, 500, { ok: false, error: error && error.message ? String(error.message) : '内部错误' })
+        respondJson(res, 500, { ok: false, error: error && error.message ? String(error.message) : 'internal error' })
       }
     }
     const handleReport = async (req, res) => {
