@@ -1,3 +1,4 @@
+// dsh-offpeak-queue — host delivery unit tests (no Cordis context required)
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { deliverOnce } from '../index.js'
@@ -8,7 +9,7 @@ const ITEM = {
   text: 'queued text',
 }
 
-test('host delivery：优先通过 apiProxy.sessions.prompt 投递冷会话', async () => {
+test('host delivery: cold sessions use apiProxy.sessions.prompt first', async () => {
   let request
   let agentsRead = false
   const ctx = {
@@ -38,20 +39,20 @@ test('host delivery：优先通过 apiProxy.sessions.prompt 投递冷会话', as
   assert.equal(agentsRead, false)
 })
 
-test('host delivery：apiProxy 拒绝时作为失败向核心状态机返回', async () => {
+test('host delivery: apiProxy rejection surfaces as a delivery failure', async () => {
   const ctx = {
     apiProxy: {
       sessions: {
         async prompt() {
-          return { result: { ok: false, error: { code: 'SESSION_NOT_FOUND', message: '目标会话不存在' } } }
+          return { result: { ok: false, error: { code: 'SESSION_NOT_FOUND', message: 'target session missing' } } }
         },
       },
     },
   }
-  await assert.rejects(() => deliverOnce(ctx, ITEM), /SESSION_NOT_FOUND: 目标会话不存在/)
+  await assert.rejects(() => deliverOnce(ctx, ITEM), /SESSION_NOT_FOUND: target session missing/)
 })
 
-test('host delivery：apiProxy 明确返回 accepted=false 时作为失败', async () => {
+test('host delivery: explicit accepted=false fails the delivery', async () => {
   const ctx = {
     apiProxy: {
       sessions: {
@@ -59,10 +60,10 @@ test('host delivery：apiProxy 明确返回 accepted=false 时作为失败', asy
       },
     },
   }
-  await assert.rejects(() => deliverOnce(ctx, ITEM), /拒绝接收/)
+  await assert.rejects(() => deliverOnce(ctx, ITEM), /refused to accept/)
 })
 
-test('host delivery：旧宿主在线 agent 后备消息包含完整 UserMessage 字段', async () => {
+test('host delivery: legacy online-agent fallback sends a full UserMessage', async () => {
   let message
   const ctx = {
     agents: {
@@ -80,13 +81,13 @@ test('host delivery：旧宿主在线 agent 后备消息包含完整 UserMessage
   assert.match(message.id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)
 })
 
-test('host delivery：无标准通道且目标会话离线时明确失败', async () => {
+test('host delivery: missing standard channel with an offline target fails clearly', async () => {
   await assert.rejects(
     () => deliverOnce({ agents: { get: () => undefined } }, ITEM),
-    /session\.prompt 不可用/,
+    /session.prompt is unavailable/,
   )
 })
 
-test('host delivery：拒绝缺少会话标识的队列项', async () => {
-  await assert.rejects(() => deliverOnce({}, { text: 'x' }), /缺少目标会话/)
+test('host delivery: an item without a session id is rejected', async () => {
+  await assert.rejects(() => deliverOnce({}, { text: 'x' }), /missing target session/)
 })

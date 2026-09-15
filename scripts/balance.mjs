@@ -1,11 +1,12 @@
+// Structural balance check for client.js: skip strings and comments,
+// then verify that every bracket closes in the right order.
 import { readFileSync } from 'node:fs'
 const src = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
-// 逐字符跳过字符串与注释，跟踪括号栈
 const stack = []
 let i = 0
 const pairs = { ')': '(', ']': '[', '}': '{' }
 let line = 1
-let mode = 'code' // code | single | double | tpl | line | block
+let mode = 'code'
 let tplDepth = 0
 while (i < src.length) {
   const ch = src[i]
@@ -24,7 +25,6 @@ while (i < src.length) {
     if (ch === '$' && next === '{') { tplDepth++; i += 2; continue }
     i++; continue
   }
-  // code mode
   if (ch === '/' && next === '/') { mode = 'line'; i += 2; continue }
   if (ch === '/' && next === '*') { mode = 'block'; i += 2; continue }
   if (ch === "'") { mode = 'single'; i++; continue }
@@ -34,12 +34,12 @@ while (i < src.length) {
   if (ch === ')' || ch === ']' || ch === '}') {
     const open = stack.pop()
     if (!open || open[0] !== pairs[ch]) {
-      console.log(`FIRST MISMATCH at line ${line} char ${ch}; expected close of ${open ? open[0] : 'nothing'} opened line ${open ? open[1] : '-'}`)
+      console.log('FIRST MISMATCH at line ' + line + ' char ' + ch + '; expected close of ' + (open ? open[0] : 'nothing') + ' opened line ' + (open ? open[1] : '-'))
       process.exit(0)
     }
     i++; continue
   }
   i++
 }
-if (stack.length) console.log(`UNCLOSED: ${stack.map((s) => s[0] + '@L' + s[1]).join(', ')}`)
+if (stack.length) console.log('UNCLOSED: ' + stack.map((s) => s[0] + '@L' + s[1]).join(', '))
 else console.log('balanced OK')
