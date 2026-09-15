@@ -1,6 +1,7 @@
-// dsh-offpeak-queue —— Host 半侧（原生静态 bundle · 防御版）
-// 硬约束：apply() 永不向外抛异常 —— 任何一步失败都只写 host.log，绝不拖垮启动/组合。
-// 对外通道：GET /dsh-offpeak-queue/state（轮询快照）、POST /action（动作）、POST /report（客户端错误上报）。
+// dsh-offpeak-queue — host half (native static bundle, defensive)
+// Hard constraints: apply() never throws outward; any failure is logged to
+// host.log and contained so startup/composition cannot be taken down.
+// Public routes: GET /dsh-offpeak-queue/state, POST /action, POST /report.
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
@@ -9,8 +10,79 @@ import os from 'node:os'
 import { createOffpeakCore } from './src/core.mjs'
 
 export const name = 'offpeak-queue'
-const VERSION = '0.1.8'
+const VERSION = '0.2.0'
 const ROUTE_PREFIX = '/dsh-offpeak-queue'
+
+/** Resolve an optional Cordis service either through ctx.get or as a direct key. */
+export function getService(ctx, name) {
+  if (!ctx) return undefined
+  try {
+    if (typeof ctx.get === 'function') {
+      const value = ctx.get(name)
+      if (value !== undefined) return value
+    }
+  } catch { /* continue */ }
+  try {
+    const direct = ctx[name]
+    if (direct !== undefined) return direct
+  } catch { /* ignore */ }
+  return undefined
+}
+
+/** Resolve a live session's provider/model pair, with the default model as fallback. */
+export function resolveSessionPair(ctx, sessionId) {
+  try {
+    const sessions = getService(ctx, 'sessions')
+    const session = sessions && typeof sessions.get === 'function' ? sessions.get(sessionId) : undefined
+    const header = session && typeof session.requestHeader === 'function' ? session.requestHeader() : undefined
+    const config = header && header.config
+    if (config && typeof config.provider === 'string' && config.provider !== '') {
+      return {
+        providerId: config.provider,
+        modelId: typeof config.model === 'string' && config.model !== '' ? config.model : undefined,
+      }
+    }
+  } catch { /* fall through */ }
+  try {
+    const defaults = getService(ctx, 'agentDefaultModel')
+    const selection = defaults && typeof defaults.currentSelection === 'function' ? defaults.currentSelection() : undefined
+    if (selection && typeof selection.provider === 'string' && selection.provider !== '') {
+      return {
+        providerId: selection.provider,
+        modelId: typeof selection.model === 'string' && selection.model !== '' ? selection.model : undefined,
+      }
+    }
+  } catch { /* ignore */ }
+  return {}
+}
+
+/** Ask dsh-offpeak for a provider/model window kind; null means "use the fallback". */
+export function offpeakPhase(ctx, providerId, modelId, at) {
+  if (typeof providerId !== 'string' || providerId === '') return null
+  const service = getService(ctx, 'offpeak')
+  if (!service || typeof service.windowKindFor !== 'function') return null
+  try {
+    const kind = service.windowKindFor(providerId, modelId, at)
+    if (kind === 'peak') return 'peak'
+    if (kind === 'offpeak') return 'trough'
+  } catch { /* ignore */ }
+  return null
+}
+
+/** Provider labels from dsh-offpeak for the queue UI. */
+export function providerSummaries(ctx) {
+  const service = getService(ctx, 'offpeak')
+  const settings = service && typeof service.settingsValue === 'function' ? service.settingsValue() : undefined
+  if (!settings || !Array.isArray(settings.providers)) return []
+  return settings.providers.map((p) => ({ id: p.id, label: p.label, enabled: p.enabled }))
+}
+
+function sessionIdFromUrl(url) {
+  try {
+    const parsed = new URL(url || '', 'http://dsh-local')
+    return parsed.searchParams.get('sessionId') || ''
+  } catch { return '' }
+}
 
 function homeRoot() {
   const env = typeof process !== 'undefined' && process.env ? process.env.DSH_HOME : undefined
@@ -100,8 +172,14 @@ export function apply(ctx) {
     tryWrite('boot start v' + VERSION)
 
     let core = null
+    const phaseForItem = (item, when) => {
+      const kind = offpeakPhase(ctx, item.providerId, item.modelId, when)
+      if (kind !== null) return kind
+      return core ? core.phase(when) : 'trough'
+    }
     try {
       core = createOffpeakCore({
+        phaseForItem,
         deliver: async (item) => {
           try {
             await deliverOnce(ctx, item)
@@ -129,11 +207,11 @@ export function apply(ctx) {
         writeFileSync(cfgPath, JSON.stringify(core.exportConfig(), null, 2), 'utf8')
       } catch (error) { log('config write failed:', error && error.message) }
     }
-    const snapshot = () => Object.assign({}, core.snapshot(), {
+    const snapshot = (extra = {}) => Object.assign({}, core.snapshot(), {
       version: VERSION,
       configPath: cfgPath,
       route: ROUTE_PREFIX,
-    })
+    }, extra)
 
     const dispatch = (action, args) => {
       const fail = (message) => ({ resp: { ok: false, error: message, state: snapshot() } })
@@ -158,9 +236,10 @@ export function apply(ctx) {
           if (!core.setPeaks(args.peaks)) return fail('invalid argument: peak hours must be 1-6 valid windows whose start and end differ')
           commit(); return done()
         case 'enqueue': {
-          const out = core.enqueue({ text: args.text, sessionId: args.sessionId })
+          const pair = resolveSessionPair(ctx, args.sessionId)
+          const out = core.enqueue({ text: args.text, sessionId: args.sessionId, providerId: pair.providerId, modelId: pair.modelId })
           if (out.ok !== true) return { resp: { ok: false, error: out.error, state: snapshot() } }
-          log('enqueue ' + out.item.id + ' target=' + out.item.sessionId)
+          log('enqueue ' + out.item.id + ' target=' + out.item.sessionId + (out.item.providerId ? ' provider=' + out.item.providerId : ''))
           return done()
         }
         case 'force': {
@@ -199,7 +278,18 @@ export function apply(ctx) {
       req.on('error', () => resolve(''))
     })
 
-    const handleState = (_req, res) => respondJson(res, 200, snapshot())
+    const handleState = (req, res) => {
+      const sessionId = sessionIdFromUrl(req && req.url)
+      const pair = sessionId === '' ? {} : resolveSessionPair(ctx, sessionId)
+      const sessionPhase = offpeakPhase(ctx, pair.providerId, pair.modelId, new Date())
+      respondJson(res, 200, snapshot({
+        session: sessionId,
+        sessionProvider: pair.providerId,
+        sessionModel: pair.modelId,
+        sessionPhase,
+        providers: providerSummaries(ctx),
+      }))
+    }
     const handleAction = async (req, res) => {
       try {
         const raw = await readBody(req)
