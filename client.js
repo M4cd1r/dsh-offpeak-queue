@@ -61,15 +61,6 @@
       "运行设置": "Runtime settings",
       "已开启低谷再发": "Off-peak sending is on",
       "当前直接发送": "Currently sending directly",
-      "高峰时段（时）": "Peak hours (hour of day)",
-      "至": "to",
-      "删除该时段": "Remove this window",
-      "删": "Del",
-      "添加高峰时段": "Add a peak window",
-      "+ 时段": "+ window",
-      "应用时段设置": "Apply the window settings",
-      "应用": "Apply",
-      "周末视为低谷（官方谷价，周六日不拦截）": "Treat weekends as off-peak (no interception on Saturday or Sunday)",
       "启用本插件": "Enable this plugin",
       "低谷并发投递": "Off-peak delivery concurrency",
       "并发 ": "concurrency ",
@@ -95,8 +86,9 @@
       "队列连接中…": "Connecting to the queue…",
       "正在读取插件状态": "Reading plugin state",
       "开启低谷再发": "Turn on off-peak sending",
-      "周末视为低谷（周六日不拦截）": "Treat weekends as off-peak (no Saturday/Sunday interception)",
-      "清空执行记录": "Clear the delivery log"
+      "清空执行记录": "Clear the delivery log",
+      "dsh-offpeak is required": "dsh-offpeak is required",
+      "Using dsh-offpeak provider schedules": "Using dsh-offpeak provider schedules"
     }
     var __dshOffpeakQueueI18n_OVERRIDE_KEY = 'dsh-offpeak-queue.locale'
     function __dshOffpeakQueueI18n_locale() {
@@ -149,26 +141,10 @@
         }
 
         // ---------- 纯逻辑 ----------
-        function localPhase(snap, date) {
-          if (!snap || !Array.isArray(snap.peaks) || snap.peaks.length === 0) return null
-          if (snap.weekendsOffPeak === true) {
-            const day = date.getDay()
-            if (day === 0 || day === 6) return 'trough'
-          }
-          const minuteOfDay = date.getHours() * 60 + date.getMinutes()
-          for (const peak of snap.peaks) {
-            const s = peak.startH * 60 + (Number.isInteger(peak.startM) ? peak.startM : 0)
-            const e = peak.endH * 60 + (Number.isInteger(peak.endM) ? peak.endM : 0)
-            if (s === e) continue
-            if (s < e ? minuteOfDay >= s && minuteOfDay < e : minuteOfDay >= s || minuteOfDay < e) return 'peak'
-          }
-          return 'trough'
-        }
         function decideTakeover(snap, owner, date) {
           if (!snap || typeof snap !== 'object') return null
           if (snap.enabled !== true || snap.planMode !== true) return null
-          const sessionPeak = snap.sessionPhase ? snap.sessionPhase === 'peak' : localPhase(snap, date) === 'peak'
-          if (!sessionPeak) return null
+          if (snap.sessionPhase !== 'peak') return null
           const hasPending = owner !== null && typeof owner === 'object' && (
             (Array.isArray(owner.interactions) && owner.interactions.length > 0)
             || (owner.pendingInteraction !== null && owner.pendingInteraction !== undefined)
@@ -385,7 +361,7 @@
           // ================= 样式（贴近产品原生：token 优先，无 token 时走中性降级） =================
           const css = [
             ':root{--oq-l1:' + ui.layer + ';--oq-l2:' + ui.layer2 + ';--oq-ln:' + ui.line + ';--oq-ln2:' + ui.line2 + ';--oq-tx:' + ui.text + ';--oq-tx2:' + ui.text2 + ';--oq-br:' + ui.brand + ';--oq-warn:' + ui.warn + ';--oq-ok:' + ui.ok + ';--oq-err:' + ui.err + '}',
-            '.oq-dock{display:flex;flex-direction:column;align-items:stretch;gap:8px;color:var(--oq-tx);font-family:inherit;text-shadow:none!important;filter:none!important}',
+            '.oq-dock{display:flex;flex-direction:column;align-items:stretch;gap:8px;color:var(--oq-tx);font-family:var(--dsw-font-family,inherit);text-shadow:none!important;filter:none!important}',
             '.oq-dock *{box-sizing:border-box;text-shadow:none!important;-webkit-text-stroke:0 transparent!important}',
             '.oq-dock button::before,.oq-dock button::after{content:none!important;display:none!important}',
             '.oq-dock-slot{box-sizing:border-box;width:100%;max-width:var(--dsh-chat-content-width,720px);margin:0 auto;padding:4px calc(var(--dsh-composer-side-clearance,0px) + 16px) 0}',
@@ -401,8 +377,8 @@
             '.oq-chip-peak .oq-dot-on{background:var(--oq-warn);box-shadow:0 0 0 3px color-mix(in srgb,var(--oq-warn) 14%,transparent)}',
             '.oq-count{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;box-sizing:border-box;padding:0 5px;border-radius:999px;background:var(--oq-tx2);color:#fff;font-size:10.5px;font-weight:650;font-variant-numeric:tabular-nums}',
             '.oq-count-on{background:var(--oq-warn)}',
-            '.oq-panel{display:flex;flex-direction:column;gap:10px;box-sizing:border-box;max-height:min(58vh,620px);overflow:auto;padding:11px;border:1px solid var(--oq-ln);border-radius:16px;background:color-mix(in srgb,var(--oq-l1) 96%,transparent);box-shadow:0 14px 38px rgba(0,0,0,.12);scrollbar-width:thin}',
-            '.oq-panel-head{position:sticky;top:-11px;z-index:1;display:flex;align-items:center;gap:8px;margin:-11px -11px 0;padding:11px 12px 9px;border-bottom:1px solid var(--oq-ln);background:var(--oq-l1);border-radius:16px 16px 0 0}',
+            '.oq-panel{display:flex;flex-direction:column;gap:10px;box-sizing:border-box;max-height:min(58vh,620px);overflow:auto;padding:11px;border:1px solid var(--oq-ln);border-radius:16px;background:var(--dsw-specific-menu,color-mix(in srgb,var(--oq-l1) 96%,transparent));box-shadow:var(--dsw-elevation-prominent,0 14px 38px rgba(0,0,0,.12));scrollbar-width:thin}',
+            '.oq-panel-head{position:sticky;top:-11px;z-index:1;display:flex;align-items:center;gap:8px;margin:-11px -11px 0;padding:11px 12px 9px;border-bottom:1px solid var(--oq-ln);background:var(--dsw-specific-menu,var(--oq-l1));border-radius:16px 16px 0 0}',
             '.oq-panel-title{font-size:13px;font-weight:650;color:var(--oq-tx)}',
             '.oq-state{display:inline-flex;align-items:center;gap:5px;height:21px;padding:0 8px;border-radius:999px;background:var(--oq-l2);color:var(--oq-tx2);font-size:11px;white-space:nowrap}',
             '.oq-state-peak{background:color-mix(in srgb,var(--oq-warn) 12%,transparent);color:var(--oq-warn)}',
@@ -587,36 +563,17 @@
             const snap = useOffpeak()
             const [open, setOpen] = useState(false)
             const { draft, setDraft } = useDraftHook(props)
-            const [rows, setRows] = useState([])
-            const [rowsKey, setRowsKey] = useState('')
             const confTimer = useRef(null)
             const [confFlash, setConfFlash] = useState('')
             const [confFlashErr, setConfFlashErr] = useState(false)
             const surface = props.surface === 'floating' ? 'floating' : 'composer-dock'
-            const peaksKey = snap && Array.isArray(snap.peaks) ? JSON.stringify(snap.peaks) : ''
-            useEffect(() => {
-              if (peaksKey !== rowsKey && snap && Array.isArray(snap.peaks)) {
-                setRowsKey(peaksKey)
-                setRows(snap.peaks.map((p) => ({ start: p.startH, end: p.endH })))
-              }
-            }, [peaksKey, rowsKey, snap])
             if (!snap || !snap.counts) return null
             const planning = snap.enabled === true && snap.planMode === true
-            const peak = snap.sessionPhase ? snap.sessionPhase === 'peak' : snap.phase === 'peak'
+            const peak = snap.sessionPhase === 'peak'
             const currentProviderLabel = providerLabel(snap, snap.sessionProvider)
             const total = snap.counts.waiting + snap.counts.work
             const togglePlan = () => { try { void act('setPlanMode', { planMode: !planning }).then(() => setDraft(typeof draft === 'string' ? draft : '')) } catch { /* ignore */ } }
             const setField = (action, value) => { try { void act(action, value) } catch { /* ignore */ } }
-            const applyPeaks = () => {
-              const peaks = []
-              for (const r of (rows || [])) {
-                const s = Number(r.start)
-                const e = Number(r.end)
-                if (!Number.isInteger(s) || !Number.isInteger(e) || s < 0 || s > 23 || e < 0 || e > 23 || s === e) return
-                peaks.push({ startH: s, endH: e })
-              }
-              try { void act('setPeaks', { peaks }) } catch { /* ignore */ }
-            }
             const pickConcurrency = (n) => {
               const show = (text, err) => {
                 setConfFlashErr(err === true)
@@ -674,21 +631,9 @@
                     el(React, 'span', null, T('运行设置')),
                     el(React, 'span', { className: 'oq-sec' }, planning ? T('已开启低谷再发') : T('当前直接发送')),
                   ),
-                  el(React, 'div', { className: 'oq-setrow' }, el(React, 'span', { className: 'oq-sec' }, T('高峰时段（时）'))),
-                  (rows || []).map((r, i) => el(React, 'div', { key: i, className: 'oq-setrow' },
-                    el(React, 'input', { className: 'oq-input', type: 'number', min: 0, max: 23, value: r.start, onChange: (e) => { const next = rows.slice(); next[i] = Object.assign({}, r, { start: e.target.value }); setRows(next) } }),
-                    el(React, 'span', { className: 'oq-sec' }, T('至')),
-                    el(React, 'input', { className: 'oq-input', type: 'number', min: 0, max: 23, value: r.end, onChange: (e) => { const next = rows.slice(); next[i] = Object.assign({}, r, { end: e.target.value }); setRows(next) } }),
-                    (rows.length > 1) ? pill(React, 'oq-btn oq-btn-danger', () => { const next = rows.filter((_x, j) => j !== i); setRows(next) }, T('删除该时段'), T('删')) : null,
-                  )),
-                  el(React, 'div', { className: 'oq-setrow' },
-                    (rows.length < 6) ? pill(React, 'oq-btn oq-btn-ghost', () => setRows(rows.concat([{ start: '23', end: '8' }])), T('添加高峰时段'), T('+ 时段')) : null,
-                    pill(React, 'oq-btn oq-btn-primary', applyPeaks, T('应用时段设置'), T('应用')),
-                  ),
-                  el(React, 'label', { className: 'oq-setrow' },
-                    el(React, 'input', { className: 'oq-check', type: 'checkbox', checked: snap.weekendsOffPeak === true, onChange: (e) => setField('setWeekendsOffPeak', { weekendsOffPeak: e.target.checked }) }),
-                    el(React, 'span', null, T('周末视为低谷（官方谷价，周六日不拦截）')),
-                  ),
+                  snap.dshOffpeakAvailable === false
+                    ? el(React, 'div', { className: 'oq-empty' }, T('dsh-offpeak is required'))
+                    : el(React, 'div', { className: 'oq-setrow' }, el(React, 'span', { className: 'oq-sec' }, T('Using dsh-offpeak provider schedules'))),
                   el(React, 'label', { className: 'oq-setrow' },
                     el(React, 'input', { className: 'oq-check', type: 'checkbox', checked: snap.enabled === true, onChange: (e) => setField('setEnabled', { enabled: e.target.checked }) }),
                     el(React, 'span', null, T('启用本插件')),
@@ -816,9 +761,6 @@
               let host = null
               let disposed = false
               let panelOpen = false
-              let rows = []
-              let rowsKey = ''
-              let rowsDirty = false
               let renderKey = ''
               let notice = ''
               let noticeKind = 'ok'
@@ -869,8 +811,7 @@
                 const updatePlanningEditor = (snap) => {
                   try {
                     const editor = findComposerEditor(host)
-                    const sessionPeak = snap && snap.sessionPhase ? snap.sessionPhase === 'peak' : Boolean(snap && snap.phase === 'peak')
-                    const planningPeak = Boolean(snap && snap.enabled === true && snap.planMode === true && sessionPeak)
+                    const planningPeak = Boolean(snap && snap.enabled === true && snap.planMode === true && snap.sessionPhase === 'peak')
                     if (markedEditor && (markedEditor !== editor || !planningPeak)) {
                       markedEditor.removeAttribute('data-oq-planning-editor')
                       markedEditor = null
@@ -930,8 +871,7 @@
                 const shouldQueueNow = () => {
                   const snap = latest
                   if (!snap || snap.enabled !== true || snap.planMode !== true) return false
-                  if (snap.sessionPhase) return snap.sessionPhase === 'peak'
-                  return snap.phase === 'peak' || localPhase(snap, new Date()) === 'peak'
+                  return snap.sessionPhase === 'peak'
                 }
                 const queueFromEditor = (editor, source, event) => {
                   if (!shouldQueueNow()) return false
@@ -1038,8 +978,8 @@
                     const active = document.activeElement
                     if (!force && active && host.contains(active) && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) return
                     const nextKey = snap ? JSON.stringify([
-                      panelOpen, notice, noticeKind, snap.enabled, snap.planMode, snap.phase, snap.sessionPhase, snap.sessionProvider, snap.weekendsOffPeak, snap.concurrency,
-                      snap.peaks, snap.counts, snap.waiting, snap.work, snap.history,
+                      panelOpen, notice, noticeKind, snap.enabled, snap.planMode, snap.sessionPhase, snap.sessionProvider, snap.dshOffpeakAvailable, snap.concurrency,
+                      snap.counts, snap.waiting, snap.work, snap.history,
                     ]) : 'loading:' + panelOpen
                     if (!force && nextKey === renderKey) return
                     renderKey = nextKey
@@ -1054,7 +994,7 @@
                       return
                     }
                     const planning = snap.enabled === true && snap.planMode === true
-                    const peak = snap.sessionPhase ? snap.sessionPhase === 'peak' : snap.phase === 'peak'
+                    const peak = snap.sessionPhase === 'peak'
                     const currentProviderLabel = providerLabel(snap, snap.sessionProvider)
                     const waiting = Array.isArray(snap.waiting) ? snap.waiting : []
                     const work = Array.isArray(snap.work) ? snap.work : []
@@ -1084,40 +1024,8 @@
                     panelHead.appendChild(domButton('oq-btn oq-btn-ghost', T('收起'), T('收起面板'), () => { panelOpen = false; renderNative(true) }))
                     panel.appendChild(panelHead)
 
-                    const peakKey = JSON.stringify(Array.isArray(snap.peaks) ? snap.peaks : [])
-                    if (!rowsDirty && peakKey !== rowsKey) {
-                      rowsKey = peakKey
-                      rows = (snap.peaks || []).map((entry) => ({ start: entry.startH, end: entry.endH }))
-                    }
                     const settings = makeCard(T('运行设置'), undefined, planning ? T('已开启低谷再发') : T('当前直接发送'))
-                    settings.appendChild(domNode('div', 'oq-sec', T('高峰时段（时）')))
-                    rows.forEach((entry, index) => {
-                      const row = domNode('div', 'oq-setrow')
-                      const start = domNode('input', 'oq-input')
-                      start.type = 'number'; start.min = '0'; start.max = '23'; start.value = String(entry.start)
-                      start.addEventListener('input', () => { rows[index].start = start.value; rowsDirty = true })
-                      const end = domNode('input', 'oq-input')
-                      end.type = 'number'; end.min = '0'; end.max = '23'; end.value = String(entry.end)
-                      end.addEventListener('input', () => { rows[index].end = end.value; rowsDirty = true })
-                      row.appendChild(start); row.appendChild(domNode('span', 'oq-sec', T('至'))); row.appendChild(end)
-                      if (rows.length > 1) row.appendChild(domButton('oq-btn oq-btn-danger', T('删'), T('删除该时段'), () => { rows.splice(index, 1); rowsDirty = true; renderNative(true) }))
-                      settings.appendChild(row)
-                    })
-                    const peakActions = domNode('div', 'oq-setrow')
-                    if (rows.length < 6) peakActions.appendChild(domButton('oq-btn oq-btn-ghost', T('+ 时段'), T('添加高峰时段'), () => { rows.push({ start: '23', end: '8' }); rowsDirty = true; renderNative(true) }))
-                    peakActions.appendChild(domButton('oq-btn oq-btn-primary', T('应用'), T('应用时段设置'), () => {
-                      const peaks = rows.map((entry) => ({ startH: Number(entry.start), endH: Number(entry.end) }))
-                      const valid = peaks.length >= 1 && peaks.length <= 6 && peaks.every((entry) => Number.isInteger(entry.startH) && Number.isInteger(entry.endH) && entry.startH >= 0 && entry.startH <= 23 && entry.endH >= 0 && entry.endH <= 23 && entry.startH !== entry.endH)
-                      if (!valid) return
-                      runAction('setPeaks', { peaks }, (ok) => { if (ok) { rowsDirty = false; rowsKey = '' } })
-                    }))
-                    settings.appendChild(peakActions)
-                    const weekend = domNode('label', 'oq-setrow')
-                    const weekendInput = domNode('input', 'oq-check')
-                    weekendInput.type = 'checkbox'; weekendInput.checked = snap.weekendsOffPeak === true
-                    weekendInput.addEventListener('change', () => runAction('setWeekendsOffPeak', { weekendsOffPeak: weekendInput.checked }))
-                    weekend.appendChild(weekendInput); weekend.appendChild(domNode('span', '', T('周末视为低谷（周六日不拦截）')))
-                    settings.appendChild(weekend)
+                    settings.appendChild(domNode('div', 'oq-sec', snap.dshOffpeakAvailable === false ? T('dsh-offpeak is required') : T('Using dsh-offpeak provider schedules')))
                     const enabled = domNode('label', 'oq-setrow')
                     const enabledInput = domNode('input', 'oq-check')
                     enabledInput.type = 'checkbox'; enabledInput.checked = snap.enabled === true

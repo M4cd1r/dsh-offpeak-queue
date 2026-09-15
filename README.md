@@ -2,7 +2,7 @@
 
 # dsh-offpeak-queue
 
-An off-peak delivery queue for DeepSeek Harness (DSH). Keep the native composer for normal messages, switch to **Send off-peak** when a request can wait, and let the plugin deliver it to the original conversation after the peak window for **that conversation's provider** ends. Provider schedules come from the `dsh-offpeak` plugin; without it the queue falls back to its own local windows.
+An off-peak delivery queue for DeepSeek Harness (DSH). Keep the native composer for normal messages, switch to **Send off-peak** when a request can wait, and let the plugin deliver it to the original conversation after the peak window for **that conversation's provider** ends. Provider schedules come from the `dsh-offpeak` plugin, which is required: without it the queue refuses to enqueue and reports the missing dependency.
 
 Tested with DSH Desktop 2.0.3 on Windows using the `desktop` profile.
 
@@ -11,6 +11,7 @@ Tested with DSH Desktop 2.0.3 on Windows using the `desktop` profile.
 - **Direct send by default** — the stock DSH composer behaves normally until you opt in.
 - **Peak-hour interception** — while **Send off-peak** is active, Enter and the native send button queue the current message during peak hours.
 - **Provider-aware scheduling** — every queued item remembers its session's provider/model, so DeepSeek items wait for DeepSeek off-peak hours and Z.ai items wait for Z.ai off-peak hours.
+- **No fallback schedule** — `dsh-offpeak` is a hard runtime dependency; there are no local peak windows to configure.
 - **Native multiline editing** — Shift+Enter continues to insert a newline.
 - **Automatic delivery** — queued messages are sent to their original conversations when off-peak time begins.
 - **Centered queue panel** — inspect waiting, in-progress, and recent items without being constrained by the composer area.
@@ -38,30 +39,29 @@ When `dsh-offpeak` is mounted, the queue asks it for the active session's provid
 
 Every queued item keeps the provider and model captured at enqueue time, so items for different providers wait independently and are delivered as each provider reaches its own off-peak window.
 
-### Fallback windows
+### Missing dsh-offpeak
 
-Without `dsh-offpeak`, or for a provider whose schedule is not configured there, the queue falls back to its own local-time windows, editable from the queue panel:
+`dsh-offpeak` is a required runtime dependency. When it is not mounted, the queue:
 
-- Peak windows: `09:00–12:00` and `14:00–18:00`
-- Saturday and Sunday: treated as off-peak
-- Delivery concurrency: `1`
-- Mode: Direct send
+- reports `dsh-offpeak is required` in the panel and in `/dsh-offpeak-queue/state`;
+- refuses `enqueue` and delivers nothing;
+- keeps provider/model resolution and the concurrency setting available for when the dependency returns.
 
-Overnight ranges such as `22:00–06:00` are supported.
+There are no local peak windows to configure.
 
 ## Requirements
 
 - DeepSeek Harness with a Web or Desktop profile
 - DSH runtime `>=0.1.5-rc.1`
 - Node.js 22.19 or newer
-- `dsh-offpeak` `>=0.2.0` mounted in the same profile for provider-aware scheduling (optional; without it the queue falls back to local windows)
+- `dsh-offpeak` `>=0.2.0` mounted in the same profile — required at runtime
 - A full DSH restart after installation or upgrade, because static client bundles are loaded at startup
 
 ## Installation
 
 ### From npm
 
-For provider-aware scheduling, install and mount [dsh-offpeak](https://github.com/AlexShang1992/dsh-offpeak) first. The queue reads its `offpeak` settings namespace and host service.
+[dsh-offpeak](https://github.com/AlexShang1992/dsh-offpeak) is required at runtime: install and mount it first. The queue reads its `offpeak` settings namespace and host service.
 
 The package-name commands below become available after `dsh-offpeak-queue` is published to npm.
 

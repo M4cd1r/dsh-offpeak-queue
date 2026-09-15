@@ -1,72 +1,28 @@
-// dsh-offpeak-queue —— 核心状态机（纯 JS，无任何框架依赖）
-// 职责：价格时段/周末判定、待办队列（等待区/投递中）、失败重试、配置。
-// 与 Cordis/UI 完全解耦：投递动作由调用方通过 deliver(item) 注入。
+// dsh-offpeak-queue — core state machine (pure JS, no framework dependencies)
+// Responsibility: per-item off-peak delivery. The host supplies a phaseForItem
+// resolver that consults dsh-offpeak; there is no legacy fallback scheduler.
+import { randomUUID } from 'node:crypto'
 
-const DEFAULT_PEAKS = [
-  { startH: 9, endH: 12 },
-  { startH: 14, endH: 18 },
-]
 const FAIL_MAX = 3
 const FAIL_COOLDOWN_MS = 5000
 const QUEUE_LIMIT = 200
 const TEXT_LIMIT = 50000
 
-/** 纯时段判定：返回 'peak' | 'trough'。weekendsOffPeak=true 时周末全天低谷。 */
-export function phaseOf(peaks, weekendsOffPeak, date) {
-  if (weekendsOffPeak === true) {
-    const day = date.getDay()
-    if (day === 0 || day === 6) return 'trough'
-  }
-  const minuteOfDay = date.getHours() * 60 + date.getMinutes()
-  for (const peak of peaks) {
-    const s = peak.startH * 60 + (Number.isInteger(peak.startM) ? peak.startM : 0)
-    const e = peak.endH * 60 + (Number.isInteger(peak.endM) ? peak.endM : 0)
-    if (s === e) continue
-    if (s < e ? minuteOfDay >= s && minuteOfDay < e : minuteOfDay >= s || minuteOfDay < e) return 'peak'
-  }
-  return 'trough'
-}
-
-function validPeaks(value) {
-  if (!Array.isArray(value)) return undefined
-  const peaks = []
-  for (const p of value) {
-    if (p === null || typeof p !== 'object') return undefined
-    const s = p.startH
-    const e = p.endH
-    const sm = p.startM === undefined ? 0 : p.startM
-    const em = p.endM === undefined ? 0 : p.endM
-    if (!Number.isInteger(s) || !Number.isInteger(e) || s < 0 || s > 23 || e < 0 || e > 23) return undefined
-    if (!Number.isInteger(sm) || !Number.isInteger(em) || sm < 0 || sm > 59 || em < 0 || em > 59) return undefined
-    if (s * 60 + sm === e * 60 + em) return undefined
-    const normalized = { startH: s, endH: e }
-    if (p.startM !== undefined || p.endM !== undefined) {
-      normalized.startM = sm
-      normalized.endM = em
-    }
-    peaks.push(normalized)
-  }
-  if (peaks.length < 1 || peaks.length > 6) return undefined
-  return peaks
-}
-
 export function createOffpeakCore({ deliver, now = () => new Date(), phaseForItem }) {
+  if (typeof phaseForItem !== 'function') throw new Error('createOffpeakCore requires phaseForItem')
+  if (typeof deliver !== 'function') throw new Error('createOffpeakCore requires deliver')
+
   const state = {
     enabled: true,
     planMode: false,
-    weekendsOffPeak: true,
     concurrency: 1,
-    peaks: DEFAULT_PEAKS.map((p) => ({ ...p })),
     waiting: [],
     work: [],
     history: [],
     seq: 0,
     lastFailAt: 0,
   }
-  const phaseFor = typeof phaseForItem === 'function'
-    ? phaseForItem
-    : (item, date) => phaseOf(state.peaks, state.weekendsOffPeak, date)
-  const submit = typeof deliver === 'function' ? deliver : async () => { throw new Error('no deliver') }
+  const submit = deliver
 
   const view = (item) => ({
     id: item.id,
@@ -136,15 +92,11 @@ export function createOffpeakCore({ deliver, now = () => new Date(), phaseForIte
   }
 
   const api = {
-    phase: (date) => phaseOf(state.peaks, state.weekendsOffPeak, date ?? now()),
     snapshot: () => ({
       version: 1,
-      phase: api.phase(),
       enabled: state.enabled,
       planMode: state.planMode,
-      weekendsOffPeak: state.weekendsOffPeak,
       concurrency: state.concurrency,
-      peaks: state.peaks.map((p) => ({ ...p })),
       counts: { waiting: state.waiting.length, work: state.work.length },
       waiting: state.waiting.map(view),
       work: state.work.map(view),
@@ -152,19 +104,13 @@ export function createOffpeakCore({ deliver, now = () => new Date(), phaseForIte
     }),
     setEnabled: (v) => { state.enabled = v === true },
     setPlanMode: (v) => { state.planMode = v === true },
-    setWeekendsOffPeak: (v) => { state.weekendsOffPeak = v === true },
     setConcurrency: (n) => { if (Number.isInteger(n) && n >= 1 && n <= 5) state.concurrency = n },
-    setPeaks: (peaks) => {
-      const next = validPeaks(peaks)
-      if (next) { state.peaks = next; return true }
-      return false
-    },
     enqueue: ({ text, sessionId, providerId, modelId }) => {
-      if (state.enabled !== true) return { ok: false, error: '插件已停用' }
-      if (state.waiting.length + state.work.length >= QUEUE_LIMIT) return { ok: false, error: '队列已满' }
+      if (state.enabled !== true) return { ok: false, error: 'plugin disabled' }
+      if (state.waiting.length + state.work.length >= QUEUE_LIMIT) return { ok: false, error: 'queue is full' }
       const clean = typeof text === 'string' ? text.trim() : ''
-      if (clean === '') return { ok: false, error: '输入为空' }
-      if (clean.length > TEXT_LIMIT) return { ok: false, error: '输入过长' }
+      if (clean === '') return { ok: false, error: 'input is empty' }
+      if (clean.length > TEXT_LIMIT) return { ok: false, error: 'input is too long' }
       const item = {
         id: 'q' + (++state.seq),
         text: clean,
@@ -180,7 +126,7 @@ export function createOffpeakCore({ deliver, now = () => new Date(), phaseForIte
     },
     force: (id) => {
       const item = findItem(id)
-      if (!item) return { ok: false, error: '未找到该输入项' }
+      if (!item) return { ok: false, error: 'item not found' }
       removeFromZones(item)
       item.status = 'work'
       state.work.push(item)
@@ -189,16 +135,16 @@ export function createOffpeakCore({ deliver, now = () => new Date(), phaseForIte
     },
     revoke: (id) => {
       const item = findItem(id)
-      if (!item) return { ok: false, error: '未找到该输入项' }
+      if (!item) return { ok: false, error: 'item not found' }
       removeFromZones(item)
       pushHistory(item, 'revoked')
       return { ok: true }
     },
     reorder: (id, zone, toIndex) => {
       const arr = zone === 'waiting' ? state.waiting : zone === 'work' ? state.work : null
-      if (!arr) return { ok: false, error: '无效区域' }
+      if (!arr) return { ok: false, error: 'invalid zone' }
       const from = arr.findIndex((i) => i.id === id)
-      if (from < 0) return { ok: false, error: '未找到该输入项' }
+      if (from < 0) return { ok: false, error: 'item not found' }
       const [moved] = arr.splice(from, 1)
       arr.splice(Math.max(0, Math.min(typeof toIndex === 'number' ? toIndex : arr.length, arr.length)), 0, moved)
       return { ok: true }
@@ -207,20 +153,14 @@ export function createOffpeakCore({ deliver, now = () => new Date(), phaseForIte
     exportConfig: () => ({
       enabled: state.enabled,
       planMode: state.planMode,
-      weekendsOffPeak: state.weekendsOffPeak,
       concurrency: state.concurrency,
-      peaks: state.peaks.map((p) => ({ ...p })),
     }),
     importConfig: (cfg) => {
       if (!cfg || typeof cfg !== 'object') return
       if (typeof cfg.enabled === 'boolean') state.enabled = cfg.enabled
       if (typeof cfg.planMode === 'boolean') state.planMode = cfg.planMode
-      if (typeof cfg.weekendsOffPeak === 'boolean') state.weekendsOffPeak = cfg.weekendsOffPeak
       if (Number.isInteger(cfg.concurrency) && cfg.concurrency >= 1 && cfg.concurrency <= 5) state.concurrency = cfg.concurrency
-      const peaks = validPeaks(cfg.peaks)
-      if (peaks) state.peaks = peaks
     },
-    /** 主循环：低谷且有配额时把等待区投递出去。date 注入便于测试/重启后对齐。 */
     tick: async (date) => {
       const when = date ?? now()
       if (state.enabled !== true) return
@@ -228,7 +168,7 @@ export function createOffpeakCore({ deliver, now = () => new Date(), phaseForIte
       let index = 0
       while (index < state.waiting.length && state.work.length < state.concurrency) {
         const item = state.waiting[index]
-        if (phaseFor(item, when) !== 'trough') {
+        if (phaseForItem(item, when) !== 'trough') {
           index += 1
           continue
         }

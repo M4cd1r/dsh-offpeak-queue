@@ -69,6 +69,12 @@ export function offpeakPhase(ctx, providerId, modelId, at) {
   return null
 }
 
+/** Whether the dsh-offpeak service needed for scheduling is mounted. */
+export function offpeakAvailable(ctx) {
+  const service = getService(ctx, 'offpeak')
+  return Boolean(service && typeof service.windowKindFor === 'function')
+}
+
 /** Provider labels from dsh-offpeak for the queue UI. */
 export function providerSummaries(ctx) {
   const service = getService(ctx, 'offpeak')
@@ -169,13 +175,13 @@ export function apply(ctx) {
 
   // 整体兜底：apply 内任何异常只写日志，绝不外抛。
   try {
-    tryWrite('boot start v' + VERSION)
+    tryWrite('boot start v' + VERSION + ' dsh-offpeak=' + (offpeakAvailable(ctx) ? 'present' : 'missing'))
 
     let core = null
     const phaseForItem = (item, when) => {
+      if (!offpeakAvailable(ctx)) return 'peak'
       const kind = offpeakPhase(ctx, item.providerId, item.modelId, when)
-      if (kind !== null) return kind
-      return core ? core.phase(when) : 'trough'
+      return kind === 'trough' ? 'trough' : 'peak'
     }
     try {
       core = createOffpeakCore({
@@ -224,18 +230,13 @@ export function apply(ctx) {
         case 'setEnabled':
           if (!flag('enabled')) return fail('invalid argument: enabled must be a boolean')
           core.setEnabled(args.enabled); commit(); return done()
-        case 'setWeekendsOffPeak':
-          if (!flag('weekendsOffPeak')) return fail('invalid argument: weekendsOffPeak must be a boolean')
-          core.setWeekendsOffPeak(args.weekendsOffPeak); commit(); return done()
         case 'setConcurrency': {
           const n = args.concurrency
           if (!Number.isInteger(n) || n < 1 || n > 5) return fail('invalid argument: concurrency must be between 1 and 5')
           core.setConcurrency(n); commit(); return done()
         }
-        case 'setPeaks':
-          if (!core.setPeaks(args.peaks)) return fail('invalid argument: peak hours must be 1-6 valid windows whose start and end differ')
-          commit(); return done()
         case 'enqueue': {
+          if (!offpeakAvailable(ctx)) return fail('dsh-offpeak is required; mount dsh-offpeak before using this queue')
           const pair = resolveSessionPair(ctx, args.sessionId)
           const out = core.enqueue({ text: args.text, sessionId: args.sessionId, providerId: pair.providerId, modelId: pair.modelId })
           if (out.ok !== true) return { resp: { ok: false, error: out.error, state: snapshot() } }
@@ -287,6 +288,7 @@ export function apply(ctx) {
         sessionProvider: pair.providerId,
         sessionModel: pair.modelId,
         sessionPhase,
+        dshOffpeakAvailable: offpeakAvailable(ctx),
         providers: providerSummaries(ctx),
       }))
     }

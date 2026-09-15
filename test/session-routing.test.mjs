@@ -8,9 +8,9 @@ test('three queued messages keep their own A/B/C target sessions', async () => {
   const core = createOffpeakCore({
     deliver: async (item) => { delivered.push({ id: item.id, sessionId: item.sessionId, text: item.text }) },
     now: () => new Date(2026, 8, 7, 20, 0, 0),
+    phaseForItem: () => 'trough',
   })
   core.setConcurrency(3)
-  core.setPeaks([{ startH: 9, endH: 12 }])
 
   const targets = [
     ['existing session A', 'session-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'],
