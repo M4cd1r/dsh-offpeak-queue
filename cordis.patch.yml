@@ -1,11 +1,11 @@
 # dsh-offpeak-queue bundle patch: one host row over the desktop profile.
-# The row name resolves from the profile's node_modules where the package
-# is installed (link: 本地依赖，与 dsh-dst-theme 同款做法).
+# The row name resolves from the profile's node_modules where the package is installed.
+# Mount dsh-offpeak before this row so the queue can read its provider schedules;
+# without it the queue falls back to its own peak windows.
 #
-# 应急开关（不必卸载）：若需临时停用本插件，可在 profile 的 cordis.patch.yml
-# （~/.dsh/profiles/desktop/cordis.patch.yml）顶部数组里加一行：
+# Emergency disable without uninstalling: add this row at the top-level array of
+# the profile's cordis.patch.yml, then restart the profile:
 #   { id: offpeak-queue, name: dsh-offpeak-queue, disabled: true }
-# 然后重启一次；要恢复则删掉那行再重启。
 - insert:
     - id: offpeak-queue
       name: dsh-offpeak-queue
