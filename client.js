@@ -167,7 +167,8 @@
         function decideTakeover(snap, owner, date) {
           if (!snap || typeof snap !== 'object') return null
           if (snap.enabled !== true || snap.planMode !== true) return null
-          if (localPhase(snap, date) !== 'peak') return null
+          const sessionPeak = snap.sessionPhase ? snap.sessionPhase === 'peak' : localPhase(snap, date) === 'peak'
+          if (!sessionPeak) return null
           const hasPending = owner !== null && typeof owner === 'object' && (
             (Array.isArray(owner.interactions) && owner.interactions.length > 0)
             || (owner.pendingInteraction !== null && owner.pendingInteraction !== undefined)
@@ -177,6 +178,14 @@
         }
         const time = (ms) => {
           try { return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) } catch { return '' }
+        }
+        function providerLabel(snap, providerId) {
+          try {
+            if (!providerId) return ''
+            const list = snap && Array.isArray(snap.providers) ? snap.providers : []
+            const found = list.find((p) => p.id === providerId)
+            return found && found.label ? found.label : providerId
+          } catch { return providerId || '' }
         }
         const el = (React) => React.createElement
         const pill = (React, className, onClick, title, children, extra) =>
@@ -256,7 +265,9 @@
           const emit = () => { const s = latest; for (const fn of [...subs]) fn(s) }
           async function refresh() {
             try {
-              const r = await fetch(BASE + '/state')
+              const sessionId = currentSessionId()
+              const query = sessionId === '' ? '' : '?sessionId=' + encodeURIComponent(sessionId)
+              const r = await fetch(BASE + '/state' + query)
               if (r.ok) {
                 const j = await r.json()
                 if (j && typeof j === 'object') { latest = j; emit() }
@@ -460,12 +471,15 @@
           function ItemRow(props) {
             const it = props.item
             const zoneLabel = props.zone === 'waiting' ? T('等待中') : T('投递中')
+            const provider = providerLabel(props.providers, it.providerId)
+            const providerText = provider ? provider + (it.modelId ? ' · ' + it.modelId : '') : ''
             return el(React, 'div', { className: 'oq-item' },
               el(React, 'div', { className: 'oq-item-meta' }, time(it.createdAt)),
               el(React, 'div', { className: 'oq-item-main' },
                 el(React, 'div', { className: 'oq-item-text', title: it.text }, it.text),
                 el(React, 'div', { className: 'oq-item-sub' },
                   el(React, 'span', null, zoneLabel),
+                  providerText !== '' ? el(React, 'span', { className: 'oq-provider' }, providerText) : null,
                   it.attempts > 0 ? el(React, 'span', null, T('重试 ') + it.attempts) : null,
                   it.error ? el(React, 'span', { className: 'oq-item-error', title: String(it.error) }, String(it.error)) : null,
                 ),
@@ -483,12 +497,15 @@
             const h = props.h
             const mark = h.status === 'done' ? '✓' : h.status === 'failed' ? '✗' : '↩'
             const color = h.status === 'done' ? ui.ok : h.status === 'failed' ? ui.err : ui.text2
+            const provider = providerLabel(props.providers, h.providerId)
+            const providerText = provider ? provider + (h.modelId ? ' · ' + h.modelId : '') : ''
             return el(React, 'div', { className: 'oq-item' },
               el(React, 'div', { className: 'oq-item-meta' }, time(h.doneAt || h.createdAt)),
               el(React, 'div', { className: 'oq-item-main' },
                 el(React, 'div', { className: 'oq-item-text', title: h.text }, h.text),
                 el(React, 'div', { className: 'oq-item-sub' },
                   el(React, 'span', { style: { color } }, mark + ' ' + statusText(h)),
+                  providerText !== '' ? el(React, 'span', { className: 'oq-provider' }, providerText) : null,
                   h.error ? el(React, 'span', { className: 'oq-item-error', title: String(h.error) }, String(h.error)) : null,
                 ),
               ),
@@ -585,7 +602,8 @@
             }, [peaksKey, rowsKey, snap])
             if (!snap || !snap.counts) return null
             const planning = snap.enabled === true && snap.planMode === true
-            const peak = snap.phase === 'peak'
+            const peak = snap.sessionPhase ? snap.sessionPhase === 'peak' : snap.phase === 'peak'
+            const currentProviderLabel = providerLabel(snap, snap.sessionProvider)
             const total = snap.counts.waiting + snap.counts.work
             const togglePlan = () => { try { void act('setPlanMode', { planMode: !planning }).then(() => setDraft(typeof draft === 'string' ? draft : '')) } catch { /* ignore */ } }
             const setField = (action, value) => { try { void act(action, value) } catch { /* ignore */ } }
@@ -646,7 +664,7 @@
               open ? el(React, 'div', { className: 'oq-panel' },
                 el(React, 'div', { className: 'oq-panel-head' },
                   el(React, 'span', { className: 'oq-panel-title' }, T('低谷发送队列')),
-                  el(React, 'span', { className: 'oq-state' + (peak ? ' oq-state-peak' : '') }, peak ? T('高峰时段') : T('低谷时段')),
+                  el(React, 'span', { className: 'oq-state' + (peak ? ' oq-state-peak' : '') }, (peak ? T('高峰时段') : T('低谷时段')) + (currentProviderLabel ? ' · ' + currentProviderLabel : '')),
                   el(React, 'span', { className: 'oq-spacer' }),
                   pill(React, 'oq-btn oq-btn-ghost', () => setOpen(false), T('收起面板'), T('收起'), { 'aria-label': T('收起队列面板') }),
                 ),
@@ -691,7 +709,7 @@
                   el(React, 'div', { className: 'oq-list' },
                     work.length === 0
                       ? el(React, 'div', { className: 'oq-empty' }, T('当前没有正在投递的消息'))
-                      : work.map((it) => el(React, ItemRow, { key: it.id, id: it.id, item: it, zone: 'work' })),
+                      : work.map((it) => el(React, ItemRow, { key: it.id, id: it.id, item: it, zone: 'work', providers: snap.providers })),
                   ),
                 ),
                 // 等待
@@ -704,7 +722,7 @@
                   el(React, 'div', { className: 'oq-list' },
                     waiting.length === 0
                       ? el(React, 'div', { className: 'oq-empty' }, T('暂无等待消息'))
-                      : waiting.map((it) => el(React, ItemRow, { key: it.id, id: it.id, item: it, zone: 'waiting' })),
+                      : waiting.map((it) => el(React, ItemRow, { key: it.id, id: it.id, item: it, zone: 'waiting', providers: snap.providers })),
                   ),
                 ),
                 // 执行记录
@@ -717,7 +735,7 @@
                   el(React, 'div', { className: 'oq-list' },
                     history.length === 0
                       ? el(React, 'div', { className: 'oq-empty' }, T('暂无记录'))
-                      : history.map((h) => el(React, HistoryRow, { key: h.id + ':' + h.doneAt, h })),
+                      : history.map((h) => el(React, HistoryRow, { key: h.id + ':' + h.doneAt, h, providers: snap.providers })),
                   ),
                 ),
               ) : null,
@@ -851,7 +869,8 @@
                 const updatePlanningEditor = (snap) => {
                   try {
                     const editor = findComposerEditor(host)
-                    const planningPeak = Boolean(snap && snap.enabled === true && snap.planMode === true && snap.phase === 'peak')
+                    const sessionPeak = snap && snap.sessionPhase ? snap.sessionPhase === 'peak' : Boolean(snap && snap.phase === 'peak')
+                    const planningPeak = Boolean(snap && snap.enabled === true && snap.planMode === true && sessionPeak)
                     if (markedEditor && (markedEditor !== editor || !planningPeak)) {
                       markedEditor.removeAttribute('data-oq-planning-editor')
                       markedEditor = null
@@ -911,6 +930,7 @@
                 const shouldQueueNow = () => {
                   const snap = latest
                   if (!snap || snap.enabled !== true || snap.planMode !== true) return false
+                  if (snap.sessionPhase) return snap.sessionPhase === 'peak'
                   return snap.phase === 'peak' || localPhase(snap, new Date()) === 'peak'
                 }
                 const queueFromEditor = (editor, source, event) => {
@@ -1018,7 +1038,7 @@
                     const active = document.activeElement
                     if (!force && active && host.contains(active) && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) return
                     const nextKey = snap ? JSON.stringify([
-                      panelOpen, notice, noticeKind, snap.enabled, snap.planMode, snap.phase, snap.weekendsOffPeak, snap.concurrency,
+                      panelOpen, notice, noticeKind, snap.enabled, snap.planMode, snap.phase, snap.sessionPhase, snap.sessionProvider, snap.weekendsOffPeak, snap.concurrency,
                       snap.peaks, snap.counts, snap.waiting, snap.work, snap.history,
                     ]) : 'loading:' + panelOpen
                     if (!force && nextKey === renderKey) return
@@ -1034,7 +1054,8 @@
                       return
                     }
                     const planning = snap.enabled === true && snap.planMode === true
-                    const peak = snap.phase === 'peak'
+                    const peak = snap.sessionPhase ? snap.sessionPhase === 'peak' : snap.phase === 'peak'
+                    const currentProviderLabel = providerLabel(snap, snap.sessionProvider)
                     const waiting = Array.isArray(snap.waiting) ? snap.waiting : []
                     const work = Array.isArray(snap.work) ? snap.work : []
                     const history = Array.isArray(snap.history) ? snap.history : []
@@ -1058,7 +1079,7 @@
                     panel.setAttribute('aria-label', T('低谷发送队列'))
                     const panelHead = domNode('div', 'oq-panel-head')
                     panelHead.appendChild(domNode('span', 'oq-panel-title', T('低谷发送队列')))
-                    panelHead.appendChild(domNode('span', 'oq-state' + (peak ? ' oq-state-peak' : ''), peak ? T('高峰时段') : T('低谷时段')))
+                    panelHead.appendChild(domNode('span', 'oq-state' + (peak ? ' oq-state-peak' : ''), (peak ? T('高峰时段') : T('低谷时段')) + (currentProviderLabel ? ' · ' + currentProviderLabel : '')))
                     panelHead.appendChild(domNode('span', 'oq-spacer'))
                     panelHead.appendChild(domButton('oq-btn oq-btn-ghost', T('收起'), T('收起面板'), () => { panelOpen = false; renderNative(true) }))
                     panel.appendChild(panelHead)
