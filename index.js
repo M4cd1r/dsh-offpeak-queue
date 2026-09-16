@@ -17,28 +17,56 @@ function homeRoot() {
   return typeof env === 'string' && env !== '' ? env : join(os.homedir(), '.dsh')
 }
 
+/**
+ * 通过 ctx.get 读取可选服务。Cordis 对未在 inject 中声明的服务读取会抛
+ * «cannot get property "x" without inject»，所以 ctx[name] 只能兜底且必须捕获异常。
+ */
+export function getService(ctx, name) {
+  if (!ctx) return undefined
+  try {
+    if (typeof ctx.get === 'function') {
+      const value = ctx.get(name)
+      if (value !== undefined) return value
+    }
+  } catch { /* 继续尝试直接读取 */ }
+  try {
+    const direct = ctx[name]
+    if (direct !== undefined) return direct
+  } catch { /* 未声明的服务读取失败即视为缺席 */ }
+  return undefined
+}
+
 /** 把一个排队消息投递到它记录的目标会话。 */
 export async function deliverOnce(ctx, item) {
   if (!item || typeof item.sessionId !== 'string' || item.sessionId === '') {
     throw new Error('缺少目标会话')
   }
 
-  // 首选宿主的标准 session.prompt 通道。它会生成完整 UserMessage，并按会话已保存的
+  const content = [{ type: 'text', text: item.text }]
+
+  // 首选宿主的标准 prompt 通道：DSH >= 0.1.2 由 api session controller 提供
+  // （ctx.sessionController）。它会生成完整 UserMessage，并按会话已保存的
   // composition/provider/model 恢复冷会话；直接 agents.resume 缺少这些参数会在等待数小时后失败。
-  let apiProxy
-  try {
-    apiProxy = ctx && typeof ctx.get === 'function' ? ctx.get('apiProxy') : undefined
-  } catch { apiProxy = undefined }
-  if (!apiProxy && ctx) apiProxy = ctx.apiProxy
+  const controller = getService(ctx, 'sessionController')
+  if (controller && typeof controller.prompt === 'function') {
+    await controller.prompt({
+      requestId: 'offpeak-queue-' + randomUUID(),
+      sessionId: item.sessionId,
+      mode: 'queue',
+      content,
+    }, new AbortController().signal)
+    return
+  }
+
+  // DSH 0.1.0/0.1.1 的等价通道（host-apiproxy）自 0.1.2 起被 session controller 取代。
+  // prompt 的入参就是请求体本身；{ rpcId, payload } 是传输层信封，塞进入参会校验失败。
+  const apiProxy = getService(ctx, 'apiProxy')
   if (apiProxy && apiProxy.sessions && typeof apiProxy.sessions.prompt === 'function') {
     const response = await apiProxy.sessions.prompt({
-      rpcId: 'offpeak-queue-' + randomUUID(),
-      payload: {
-        sessionId: item.sessionId,
-        mode: 'queue',
-        content: [{ type: 'text', text: item.text }],
-      },
-    })
+      sessionId: item.sessionId,
+      mode: 'queue',
+      content,
+    }, new AbortController().signal)
     const result = response && typeof response === 'object' ? response.result : undefined
     if (result && typeof result === 'object' && result.ok === false) {
       const error = result.error && typeof result.error === 'object' ? result.error : {}
@@ -55,19 +83,16 @@ export async function deliverOnce(ctx, item) {
     return
   }
 
-  // 兼容缺少 apiProxy 的旧宿主：仅复用仍在线的 agent。消息必须包含 DSH UserMessage
-  // 的 role/id；冷会话不在这里猜测模型配置，以免投递到错误的 composition。
-  let agents
-  try {
-    agents = ctx && typeof ctx.get === 'function' ? ctx.get('agents') : undefined
-  } catch { agents = undefined }
-  if (!agents && ctx) agents = ctx.agents
+  // 两条 prompt 通道都缺席时（宿主过旧或未挂载 api session controller），仅复用仍在线的
+  // agent。消息必须包含 DSH UserMessage 的 role/id；冷会话不在这里猜测模型配置，
+  // 以免投递到错误的 composition。
+  const agents = getService(ctx, 'agents')
   const agent = agents && typeof agents.get === 'function' ? agents.get(item.sessionId) : undefined
   if (!agent || typeof agent.followup !== 'function') {
-    throw new Error('session.prompt 不可用，且目标会话当前未在线')
+    throw new Error('宿主未提供 session.prompt 通道，且目标会话当前未在线')
   }
   const message = {
-    content: [{ type: 'text', text: item.text }],
+    content,
     source: { kind: 'user' },
     role: 'user',
     id: randomUUID(),
