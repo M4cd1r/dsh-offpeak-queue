@@ -1,6 +1,7 @@
-// dsh-offpeak-queue —— Host 半侧（原生静态 bundle · 防御版）
-// 硬约束：apply() 永不向外抛异常 —— 任何一步失败都只写 host.log，绝不拖垮启动/组合。
-// 对外通道：GET /dsh-offpeak-queue/state（轮询快照）、POST /action（动作）、POST /report（客户端错误上报）。
+// dsh-offpeak-queue — host half (native static bundle, defensive)
+// Hard constraints: apply() never throws outward; any failure is logged to
+// host.log and contained so startup/composition cannot be taken down.
+// Public routes: GET /dsh-offpeak-queue/state, POST /action, POST /report.
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
@@ -9,8 +10,85 @@ import os from 'node:os'
 import { createOffpeakCore } from './src/core.mjs'
 
 export const name = 'offpeak-queue'
-const VERSION = '0.1.7'
+const VERSION = '0.2.0'
 const ROUTE_PREFIX = '/dsh-offpeak-queue'
+
+/** Resolve an optional Cordis service either through ctx.get or as a direct key. */
+export function getService(ctx, name) {
+  if (!ctx) return undefined
+  try {
+    if (typeof ctx.get === 'function') {
+      const value = ctx.get(name)
+      if (value !== undefined) return value
+    }
+  } catch { /* continue */ }
+  try {
+    const direct = ctx[name]
+    if (direct !== undefined) return direct
+  } catch { /* ignore */ }
+  return undefined
+}
+
+/** Resolve a live session's provider/model pair, with the default model as fallback. */
+export function resolveSessionPair(ctx, sessionId) {
+  try {
+    const sessions = getService(ctx, 'sessions')
+    const session = sessions && typeof sessions.get === 'function' ? sessions.get(sessionId) : undefined
+    const header = session && typeof session.requestHeader === 'function' ? session.requestHeader() : undefined
+    const config = header && header.config
+    if (config && typeof config.provider === 'string' && config.provider !== '') {
+      return {
+        providerId: config.provider,
+        modelId: typeof config.model === 'string' && config.model !== '' ? config.model : undefined,
+      }
+    }
+  } catch { /* fall through */ }
+  try {
+    const defaults = getService(ctx, 'agentDefaultModel')
+    const selection = defaults && typeof defaults.currentSelection === 'function' ? defaults.currentSelection() : undefined
+    if (selection && typeof selection.provider === 'string' && selection.provider !== '') {
+      return {
+        providerId: selection.provider,
+        modelId: typeof selection.model === 'string' && selection.model !== '' ? selection.model : undefined,
+      }
+    }
+  } catch { /* ignore */ }
+  return {}
+}
+
+/** Ask dsh-offpeak for a provider/model window kind; null means "use the fallback". */
+export function offpeakPhase(ctx, providerId, modelId, at) {
+  if (typeof providerId !== 'string' || providerId === '') return null
+  const service = getService(ctx, 'offpeak')
+  if (!service || typeof service.windowKindFor !== 'function') return null
+  try {
+    const kind = service.windowKindFor(providerId, modelId, at)
+    if (kind === 'peak') return 'peak'
+    if (kind === 'offpeak') return 'trough'
+  } catch { /* ignore */ }
+  return null
+}
+
+/** Whether the dsh-offpeak service needed for scheduling is mounted. */
+export function offpeakAvailable(ctx) {
+  const service = getService(ctx, 'offpeak')
+  return Boolean(service && typeof service.windowKindFor === 'function')
+}
+
+/** Provider labels from dsh-offpeak for the queue UI. */
+export function providerSummaries(ctx) {
+  const service = getService(ctx, 'offpeak')
+  const settings = service && typeof service.settingsValue === 'function' ? service.settingsValue() : undefined
+  if (!settings || !Array.isArray(settings.providers)) return []
+  return settings.providers.map((p) => ({ id: p.id, label: p.label, enabled: p.enabled }))
+}
+
+function sessionIdFromUrl(url) {
+  try {
+    const parsed = new URL(url || '', 'http://dsh-local')
+    return parsed.searchParams.get('sessionId') || ''
+  } catch { return '' }
+}
 
 function homeRoot() {
   const env = typeof process !== 'undefined' && process.env ? process.env.DSH_HOME : undefined
@@ -20,30 +98,40 @@ function homeRoot() {
 /** 把一个排队消息投递到它记录的目标会话。 */
 export async function deliverOnce(ctx, item) {
   if (!item || typeof item.sessionId !== 'string' || item.sessionId === '') {
-    throw new Error('缺少目标会话')
+    throw new Error('missing target session')
   }
 
-  // 首选宿主的标准 session.prompt 通道。它会生成完整 UserMessage，并按会话已保存的
-  // composition/provider/model 恢复冷会话；直接 agents.resume 缺少这些参数会在等待数小时后失败。
-  let apiProxy
-  try {
-    apiProxy = ctx && typeof ctx.get === 'function' ? ctx.get('apiProxy') : undefined
-  } catch { apiProxy = undefined }
-  if (!apiProxy && ctx) apiProxy = ctx.apiProxy
+  const content = [{ type: 'text', text: item.text }]
+
+  // Preferred channel: the host's api session controller (ctx.sessionController, DSH >= 0.1.2).
+  // It resumes a cold session with the composition/provider/model already recorded for it and
+  // mints the full UserMessage; agents.resume without those parameters fails hours later.
+  const controller = getService(ctx, 'sessionController')
+  if (controller && typeof controller.prompt === 'function') {
+    await controller.prompt({
+      requestId: 'offpeak-queue-' + randomUUID(),
+      sessionId: item.sessionId,
+      mode: 'queue',
+      content,
+    }, new AbortController().signal)
+    return
+  }
+
+  // DSH 0.1.0/0.1.1 exposed the same capability as ctx.apiProxy (host-apiproxy), replaced by the
+  // session controller in 0.1.2. prompt takes the request body itself; the { rpcId, payload }
+  // pair is the transport envelope and fails request validation when passed as the payload.
+  const apiProxy = getService(ctx, 'apiProxy')
   if (apiProxy && apiProxy.sessions && typeof apiProxy.sessions.prompt === 'function') {
     const response = await apiProxy.sessions.prompt({
-      rpcId: 'offpeak-queue-' + randomUUID(),
-      payload: {
-        sessionId: item.sessionId,
-        mode: 'queue',
-        content: [{ type: 'text', text: item.text }],
-      },
-    })
+      sessionId: item.sessionId,
+      mode: 'queue',
+      content,
+    }, new AbortController().signal)
     const result = response && typeof response === 'object' ? response.result : undefined
     if (result && typeof result === 'object' && result.ok === false) {
       const error = result.error && typeof result.error === 'object' ? result.error : {}
       const code = typeof error.code === 'string' && error.code !== '' ? error.code + ': ' : ''
-      const message = typeof error.message === 'string' && error.message !== '' ? error.message : 'DSH 拒绝接收队列消息'
+      const message = typeof error.message === 'string' && error.message !== '' ? error.message : 'DSH refused to accept the queued message'
       throw new Error(code + message)
     }
     const accepted = result && typeof result === 'object' && result.value && typeof result.value === 'object'
@@ -51,23 +139,20 @@ export async function deliverOnce(ctx, item) {
       : result && typeof result === 'object' && 'accepted' in result
         ? result.accepted
       : response && typeof response === 'object' ? response.accepted : undefined
-    if (accepted === false) throw new Error('DSH 拒绝接收队列消息')
+    if (accepted === false) throw new Error('DSH refused to accept the queued message')
     return
   }
 
-  // 兼容缺少 apiProxy 的旧宿主：仅复用仍在线的 agent。消息必须包含 DSH UserMessage
-  // 的 role/id；冷会话不在这里猜测模型配置，以免投递到错误的 composition。
-  let agents
-  try {
-    agents = ctx && typeof ctx.get === 'function' ? ctx.get('agents') : undefined
-  } catch { agents = undefined }
-  if (!agents && ctx) agents = ctx.agents
+  // With neither prompt channel mounted (old or trimmed-down host), reuse a still-online agent
+  // only. The message must carry the DSH UserMessage role/id; a cold session is not resumed here
+  // because guessing a composition would deliver it to the wrong model.
+  const agents = getService(ctx, 'agents')
   const agent = agents && typeof agents.get === 'function' ? agents.get(item.sessionId) : undefined
   if (!agent || typeof agent.followup !== 'function') {
-    throw new Error('session.prompt 不可用，且目标会话当前未在线')
+    throw new Error('no prompt channel is available and the target session is offline')
   }
   const message = {
-    content: [{ type: 'text', text: item.text }],
+    content,
     source: { kind: 'user' },
     role: 'user',
     id: randomUUID(),
@@ -97,11 +182,17 @@ export function apply(ctx) {
 
   // 整体兜底：apply 内任何异常只写日志，绝不外抛。
   try {
-    tryWrite('boot start v' + VERSION)
+    tryWrite('boot start v' + VERSION + ' dsh-offpeak=' + (offpeakAvailable(ctx) ? 'present' : 'missing'))
 
     let core = null
+    const phaseForItem = (item, when) => {
+      if (!offpeakAvailable(ctx)) return 'peak'
+      const kind = offpeakPhase(ctx, item.providerId, item.modelId, when)
+      return kind === 'trough' ? 'trough' : 'peak'
+    }
     try {
       core = createOffpeakCore({
+        phaseForItem,
         deliver: async (item) => {
           try {
             await deliverOnce(ctx, item)
@@ -129,11 +220,11 @@ export function apply(ctx) {
         writeFileSync(cfgPath, JSON.stringify(core.exportConfig(), null, 2), 'utf8')
       } catch (error) { log('config write failed:', error && error.message) }
     }
-    const snapshot = () => Object.assign({}, core.snapshot(), {
+    const snapshot = (extra = {}) => Object.assign({}, core.snapshot(), {
       version: VERSION,
       configPath: cfgPath,
       route: ROUTE_PREFIX,
-    })
+    }, extra)
 
     const dispatch = (action, args) => {
       const fail = (message) => ({ resp: { ok: false, error: message, state: snapshot() } })
@@ -141,26 +232,22 @@ export function apply(ctx) {
       const flag = (key) => typeof args[key] === 'boolean'
       switch (action) {
         case 'setPlanMode':
-          if (!flag('planMode')) return fail('参数无效：planMode 须为布尔')
+          if (!flag('planMode')) return fail('invalid argument: planMode must be a boolean')
           core.setPlanMode(args.planMode); commit(); return done()
         case 'setEnabled':
-          if (!flag('enabled')) return fail('参数无效：enabled 须为布尔')
+          if (!flag('enabled')) return fail('invalid argument: enabled must be a boolean')
           core.setEnabled(args.enabled); commit(); return done()
-        case 'setWeekendsOffPeak':
-          if (!flag('weekendsOffPeak')) return fail('参数无效：weekendsOffPeak 须为布尔')
-          core.setWeekendsOffPeak(args.weekendsOffPeak); commit(); return done()
         case 'setConcurrency': {
           const n = args.concurrency
-          if (!Number.isInteger(n) || n < 1 || n > 5) return fail('参数无效：并发须为 1-5')
+          if (!Number.isInteger(n) || n < 1 || n > 5) return fail('invalid argument: concurrency must be between 1 and 5')
           core.setConcurrency(n); commit(); return done()
         }
-        case 'setPeaks':
-          if (!core.setPeaks(args.peaks)) return fail('参数无效：高峰时段须为 1-6 个有效且起止不同的时段')
-          commit(); return done()
         case 'enqueue': {
-          const out = core.enqueue({ text: args.text, sessionId: args.sessionId })
+          if (!offpeakAvailable(ctx)) return fail('dsh-offpeak is required; mount dsh-offpeak before using this queue')
+          const pair = resolveSessionPair(ctx, args.sessionId)
+          const out = core.enqueue({ text: args.text, sessionId: args.sessionId, providerId: pair.providerId, modelId: pair.modelId })
           if (out.ok !== true) return { resp: { ok: false, error: out.error, state: snapshot() } }
-          log('enqueue ' + out.item.id + ' target=' + out.item.sessionId)
+          log('enqueue ' + out.item.id + ' target=' + out.item.sessionId + (out.item.providerId ? ' provider=' + out.item.providerId : ''))
           return done()
         }
         case 'force': {
@@ -181,7 +268,7 @@ export function apply(ctx) {
         case 'clearHistory':
           core.clearHistory(); return done()
         default:
-          return fail('未知动作：' + action)
+          return fail('unknown action: ' + action)
       }
     }
 
@@ -199,7 +286,19 @@ export function apply(ctx) {
       req.on('error', () => resolve(''))
     })
 
-    const handleState = (_req, res) => respondJson(res, 200, snapshot())
+    const handleState = (req, res) => {
+      const sessionId = sessionIdFromUrl(req && req.url)
+      const pair = sessionId === '' ? {} : resolveSessionPair(ctx, sessionId)
+      const sessionPhase = offpeakPhase(ctx, pair.providerId, pair.modelId, new Date())
+      respondJson(res, 200, snapshot({
+        session: sessionId,
+        sessionProvider: pair.providerId,
+        sessionModel: pair.modelId,
+        sessionPhase,
+        dshOffpeakAvailable: offpeakAvailable(ctx),
+        providers: providerSummaries(ctx),
+      }))
+    }
     const handleAction = async (req, res) => {
       try {
         const raw = await readBody(req)
@@ -211,7 +310,7 @@ export function apply(ctx) {
         log('action ' + (action || '(empty)') + ': ' + (out.resp && out.resp.ok === true ? 'ok' : 'failed'))
         respondJson(res, out.httpStatus || 200, out.resp)
       } catch (error) {
-        respondJson(res, 500, { ok: false, error: error && error.message ? String(error.message) : '内部错误' })
+        respondJson(res, 500, { ok: false, error: error && error.message ? String(error.message) : 'internal error' })
       }
     }
     const handleReport = async (req, res) => {

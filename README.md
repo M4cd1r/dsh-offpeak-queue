@@ -2,7 +2,7 @@
 
 # dsh-offpeak-queue
 
-An off-peak delivery queue for DeepSeek Harness (DSH). Keep the native composer for normal messages, switch to **Send off-peak** when a request can wait, and let the plugin deliver it to the original conversation after the configured peak window ends.
+An off-peak delivery queue for DeepSeek Harness (DSH). Keep the native composer for normal messages, switch to **Send off-peak** when a request can wait, and let the plugin deliver it to the original conversation after the peak window for **that conversation's provider** ends. Provider schedules come from the `dsh-offpeak` plugin, which is required: without it the queue refuses to enqueue and reports the missing dependency.
 
 Tested with DSH Desktop 2.0.3 on Windows using the `desktop` profile.
 
@@ -10,6 +10,8 @@ Tested with DSH Desktop 2.0.3 on Windows using the `desktop` profile.
 
 - **Direct send by default** — the stock DSH composer behaves normally until you opt in.
 - **Peak-hour interception** — while **Send off-peak** is active, Enter and the native send button queue the current message during peak hours.
+- **Provider-aware scheduling** — every queued item remembers its session's provider/model, so DeepSeek items wait for DeepSeek off-peak hours and Z.ai items wait for Z.ai off-peak hours.
+- **No fallback schedule** — `dsh-offpeak` is a hard runtime dependency; there are no local peak windows to configure.
 - **Native multiline editing** — Shift+Enter continues to insert a newline.
 - **Automatic delivery** — queued messages are sent to their original conversations when off-peak time begins.
 - **Centered queue panel** — inspect waiting, in-progress, and recent items without being constrained by the composer area.
@@ -27,25 +29,39 @@ Tested with DSH Desktop 2.0.3 on Windows using the `desktop` profile.
 | Enabled | Send off-peak | Off-peak | DSH sends normally |
 | Enabled | Send off-peak | Peak | The message is queued |
 
-Defaults use local system time:
+### Provider schedules
 
-- Peak windows: `09:00–12:00` and `14:00–18:00`
-- Saturday and Sunday: treated as off-peak
-- Delivery concurrency: `1`
-- Mode: Direct send
+When `dsh-offpeak` is mounted, the queue asks it for the active session's provider/model window on every send and delivery decision:
 
-All of these settings can be changed from the queue panel. Overnight ranges such as `22:00–06:00` are supported.
+- a DeepSeek conversation queues only during DeepSeek's peak windows;
+- a Z.ai conversation queues only during Z.ai's peak windows;
+- a flat-rate provider never queues.
+
+Every queued item keeps the provider and model captured at enqueue time, so items for different providers wait independently and are delivered as each provider reaches its own off-peak window.
+
+### Missing dsh-offpeak
+
+`dsh-offpeak` is a required runtime dependency. When it is not mounted, the queue:
+
+- reports `dsh-offpeak is required` in the panel and in `/dsh-offpeak-queue/state`;
+- refuses `enqueue` and delivers nothing;
+- keeps provider/model resolution and the concurrency setting available for when the dependency returns.
+
+There are no local peak windows to configure.
 
 ## Requirements
 
 - DeepSeek Harness with a Web or Desktop profile
-- DSH runtime `>=0.1.1-rc.1`
-- Node.js 20 or newer
+- DSH runtime `>=0.1.5-rc.1`
+- Node.js 22.19 or newer
+- `dsh-offpeak` `>=0.2.0` mounted in the same profile — required at runtime
 - A full DSH restart after installation or upgrade, because static client bundles are loaded at startup
 
 ## Installation
 
 ### From npm
+
+[dsh-offpeak](https://github.com/AlexShang1992/dsh-offpeak) is required at runtime: install and mount it first. The queue reads its `offpeak` settings namespace and host service.
 
 The package-name commands below become available after `dsh-offpeak-queue` is published to npm.
 
@@ -84,7 +100,7 @@ Replace `desktop` with the profile you actually use, then restart that profile.
 
 1. Open a DSH conversation. The plugin shows **Direct send** and **Queue n** near the composer.
 2. Click **Direct send** to switch to **Send off-peak**.
-3. During a configured peak window, compose a message and press Enter or click DSH's send button. The plugin queues the message and clears the composer only after the host confirms it was accepted.
+3. During the current provider's peak window, compose a message and press Enter or click DSH's send button. The plugin queues the message and clears the composer only after the host confirms it was accepted.
 4. Click **Queue n** to inspect or manage queued work.
 5. At off-peak time, the host delivers each item to the conversation in which it was created.
 
@@ -105,6 +121,7 @@ Configuration and diagnostics are kept under:
 - Configuration is persisted in `config.json`.
 - Waiting, in-progress, and history entries currently live in memory. They are cleared when the DSH host process exits. Resolve or copy pending messages before restarting DSH.
 - The queue accepts up to 200 pending items and each message is limited to 50,000 characters.
+- Provider and model ids are captured from the live session when the message is queued; they are used only to look up that provider's schedule.
 - Failed deliveries are retried up to three times, with a short cooldown between attempts.
 
 ## Troubleshooting
