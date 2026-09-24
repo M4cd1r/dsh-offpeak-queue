@@ -101,22 +101,32 @@ export async function deliverOnce(ctx, item) {
     throw new Error('missing target session')
   }
 
-  // 首选宿主的标准 session.prompt 通道。它会生成完整 UserMessage，并按会话已保存的
-  // composition/provider/model 恢复冷会话；直接 agents.resume 缺少这些参数会在等待数小时后失败。
-  let apiProxy
-  try {
-    apiProxy = ctx && typeof ctx.get === 'function' ? ctx.get('apiProxy') : undefined
-  } catch { apiProxy = undefined }
-  if (!apiProxy && ctx) apiProxy = ctx.apiProxy
+  const content = [{ type: 'text', text: item.text }]
+
+  // Preferred channel: the host's api session controller (ctx.sessionController, DSH >= 0.1.2).
+  // It resumes a cold session with the composition/provider/model already recorded for it and
+  // mints the full UserMessage; agents.resume without those parameters fails hours later.
+  const controller = getService(ctx, 'sessionController')
+  if (controller && typeof controller.prompt === 'function') {
+    await controller.prompt({
+      requestId: 'offpeak-queue-' + randomUUID(),
+      sessionId: item.sessionId,
+      mode: 'queue',
+      content,
+    }, new AbortController().signal)
+    return
+  }
+
+  // DSH 0.1.0/0.1.1 exposed the same capability as ctx.apiProxy (host-apiproxy), replaced by the
+  // session controller in 0.1.2. prompt takes the request body itself; the { rpcId, payload }
+  // pair is the transport envelope and fails request validation when passed as the payload.
+  const apiProxy = getService(ctx, 'apiProxy')
   if (apiProxy && apiProxy.sessions && typeof apiProxy.sessions.prompt === 'function') {
     const response = await apiProxy.sessions.prompt({
-      rpcId: 'offpeak-queue-' + randomUUID(),
-      payload: {
-        sessionId: item.sessionId,
-        mode: 'queue',
-        content: [{ type: 'text', text: item.text }],
-      },
-    })
+      sessionId: item.sessionId,
+      mode: 'queue',
+      content,
+    }, new AbortController().signal)
     const result = response && typeof response === 'object' ? response.result : undefined
     if (result && typeof result === 'object' && result.ok === false) {
       const error = result.error && typeof result.error === 'object' ? result.error : {}
@@ -133,19 +143,16 @@ export async function deliverOnce(ctx, item) {
     return
   }
 
-  // 兼容缺少 apiProxy 的旧宿主：仅复用仍在线的 agent。消息必须包含 DSH UserMessage
-  // 的 role/id；冷会话不在这里猜测模型配置，以免投递到错误的 composition。
-  let agents
-  try {
-    agents = ctx && typeof ctx.get === 'function' ? ctx.get('agents') : undefined
-  } catch { agents = undefined }
-  if (!agents && ctx) agents = ctx.agents
+  // With neither prompt channel mounted (old or trimmed-down host), reuse a still-online agent
+  // only. The message must carry the DSH UserMessage role/id; a cold session is not resumed here
+  // because guessing a composition would deliver it to the wrong model.
+  const agents = getService(ctx, 'agents')
   const agent = agents && typeof agents.get === 'function' ? agents.get(item.sessionId) : undefined
   if (!agent || typeof agent.followup !== 'function') {
-    throw new Error('session.prompt is unavailable and the target session is offline')
+    throw new Error('no prompt channel is available and the target session is offline')
   }
   const message = {
-    content: [{ type: 'text', text: item.text }],
+    content,
     source: { kind: 'user' },
     role: 'user',
     id: randomUUID(),
